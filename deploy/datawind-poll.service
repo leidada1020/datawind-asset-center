@@ -1,0 +1,17 @@
+[Unit]
+Description=DataWind Asset Center - 5min Dataset Poller
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/datawind-asset-center
+ExecStart=/usr/bin/python3 /opt/datawind-asset-center/poll_5min.py --interval 300
+Restart=always
+RestartSec=10
+# 日志由脚本 TimedRotatingFileHandler 写 logs/poll_5min.log; 如需 journal 冗余可去掉下行注释
+# StandardOutput=append:/opt/datawind-asset-center/logs/systemd.out
+# StandardError=append:/opt/datawind-asset-center/logs/systemd.err
+
+[Install]
+WantedBy=multi-user.target

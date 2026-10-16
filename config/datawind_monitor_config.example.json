@@ -1,0 +1,14 @@
+{
+  "api_base": "https://console.volcengine.com/bi/datawind/aeolus",
+  "region": "cn-beijing",
+  "client_id": "REPLACE_WITH_REAL_CLIENT_ID",
+  "client_secret": "REPLACE_WITH_REAL_CLIENT_SECRET",
+  "proxy_user": "REPLACE_WITH_PROXY_USER",
+  "expire": 3600,
+  "app_id": 20074764,
+  "doris_host": "203.123.86.71",
+  "doris_port": 9030,
+  "doris_user": "pl",
+  "doris_password": "REPLACE_WITH_REAL_DORIS_PASSWORD",
+  "doris_db": "etl"
+}

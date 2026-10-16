@@ -1,0 +1,146 @@
+-- =====================================================================
+-- DataWind 数据集资产监控 · 系统级落库设计 v2.1（作业运维项目）
+-- 目标库: Doris etl (203.123.86.71:9030)  MySQL 协议
+-- 需求: ① dt 日期分区 + etl_time 处理时间  ② 字段/表描述详细+枚举值含义  ③ 快照自比对识别变更
+-- 命名规范: 表名=层前缀_业务域_对象_必要粒度_存储后缀 (对齐《公司建模开发指南》)
+--   存储后缀: _s_d=每日快照(按dt留史,先删当日分区再全量)  _i_d=日增量(按日累积,同日幂等不重复)
+--   本设计: 快照表=ods_datawind_dataset_s_d  变更日志=dwd_datawind_dataset_change_i_d
+-- 设计日期: 2026-10-15
+-- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- 表1: etl.ods_datawind_dataset_s_d  数据集每日快照（_s_d 每日快照, 分区表）
+-- 每次运行写入当天全量 347 条, dt 动态分区; 变更识别通过"今天 vs 昨天"分区自比对
+-- 重跑语义: 先删当日分区(dt=抓取日)再全量写入
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS etl.ods_datawind_dataset_s_d (
+    dt                      DATE           COMMENT '数据日期(分区键)=抓取日, 动态分区自动维护',
+    etl_time                DATETIME       COMMENT '数据处理时间, 本次ETL写入时刻(Asia/Shanghai)',
+    dataset_id              BIGINT         COMMENT '数据集ID(DataWind全局唯一)',
+    name                    VARCHAR(512)   COMMENT '数据集名称',
+    owner_email             VARCHAR(128)   COMMENT '负责人邮箱(ownerEmailPrefix, 如 llyunze@2105712913)',
+    type_code               TINYINT        COMMENT '数据集类型编码: 22=prep数据集(加工型) 32=直连数据集(直接读外部表) 100=ClickHouse CDW数据集',
+    type_name               VARCHAR(64)    COMMENT '数据集类型名: prep 数据集 / (直连,接口未回填) / ClickHouse CDW数据集',
+    status                  TINYINT        COMMENT '数据集状态: 0=正常 1=彻底删除 2=回收站; 31=实测存在5个(疑为停用/异常,待确认)',
+    sync_type               TINYINT        COMMENT '同步调度模式: 1=自动 2=手动; NULL=直连无调度(实测1=322个,2=18个)',
+    frequency               VARCHAR(24)    COMMENT '同步频率: daily=按天(256) hourly=按小时(48) every_ten_minutes=每10分钟(12); NULL=无调度(31)',
+    schedule_time           VARCHAR(16)    COMMENT '计划调度时刻 HH:MM, 如 09:30(166个)/09:00/10:30; hourly任务为0',
+    schedule_day            VARCHAR(256)   COMMENT '计划调度日: 0=每天; 小时级任务为0,1,2,...,23(逗号分隔全部小时); 周/月模式按平台定义',
+    ttl                     INT            COMMENT '数据保留天数: 3(165个)/7(93个)/1500≈4年(18)/365(14)/0=不清理',
+    connection_mode         TINYINT        COMMENT '连接模式: 0=prep加工型(有SQL加工) 1=直连型(直接读外部表)',
+    sync_mode               TINYINT        COMMENT '同步模式(平台文档: 1=手动 2=自动; 实测接口均为0=默认未设置, 该字段优先级低于sync_type)',
+    partition_filter        VARCHAR(64)    COMMENT '分区默认过滤条件 partitionDefaultFilter, 如 day',
+    confidentiality         VARCHAR(32)    COMMENT '数据密级(空=未设置)',
+    last_sync_time          DATETIME       COMMENT '最近一次同步完成时间(数据层面)',
+    last_success_task_time  DATETIME       COMMENT '最近一次成功任务时间(调度层面), 与上次比较判断是否有新数据产出',
+    rows_last_success       BIGINT         COMMENT '最近一次成功任务产出行数, 与上次比较判断行数增减',
+    elapsed_last_success    INT            COMMENT '最近一次成功任务耗时(秒)',
+    upstream_tables         VARCHAR(4000)  COMMENT '上游来源表 db.table 逗号分隔(如 mv.mv_ods_zamloan2_orderinfo_i_d; 含Doris外部表 zamloan2_ct.xxx)',
+    folder_id               BIGINT         COMMENT '所属文件夹ID(baseConf.parentId; 0/NULL=未归档根目录), 与文件夹树关联',
+    folder_path             VARCHAR(512)   COMMENT '文件夹路径(如 ZamLoan/zamloan2.0; 由folder_id解析文件夹树拼出)',
+    is_hive_table           TINYINT        COMMENT '是否使用Hive表: 0=否 1=是',
+    is_hive_partition       TINYINT        COMMENT '是否指定Hive分区: 0=否 1=是',
+    hsql_used               TINYINT        COMMENT '是否使用HSQL加工: 0=否 1=是',
+    url                     VARCHAR(512)   COMMENT '数据集控制台URL(可直接跳转详情页)',
+    ctime                   DATETIME       COMMENT '数据集创建时间',
+    mtime                   DATETIME       COMMENT '数据集元数据最后修改时间(变更检测重要信号)'
+) ENGINE=OLAP
+UNIQUE KEY(dt, dataset_id)
+COMMENT 'DataWind数据集每日快照(s_d): 每日全量写入, dt分区+etl_time; 重跑先删当日分区再全量; 变更识别=今天vs昨天分区自比对'
+PARTITION BY RANGE(dt) ()
+DISTRIBUTED BY HASH(dataset_id) BUCKETS 16
+PROPERTIES (
+    "dynamic_partition.enable" = "true",
+    "dynamic_partition.time_unit" = "DAY",
+    "dynamic_partition.start" = "-30",
+    "dynamic_partition.end" = "3",
+    "dynamic_partition.prefix" = "p",
+    "dynamic_partition.replication_num" = "2",
+    "replication_num" = "2"
+);
+
+-- ---------------------------------------------------------------------
+-- 表2: etl.dwd_datawind_dataset_change_i_d  变更日志（_i_d 日增量, 按dt分区）
+-- 每类变化写一条; 幂等: 同日重跑不重复(change_id 当日自增, 与dt构成唯一键)
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS etl.dwd_datawind_dataset_change_i_d (
+    dt                  DATE         COMMENT '变更发生日(分区键)=快照日',
+    etl_time            DATETIME     COMMENT '数据处理时间',
+    change_id           BIGINT       COMMENT '变化序号(当日自增, 与dt构成唯一键, 重跑幂等)',
+    dataset_id          BIGINT       COMMENT '数据集ID',
+    dataset_name        VARCHAR(512) COMMENT '数据集名称(变更后)',
+    change_type         VARCHAR(32)  COMMENT '变更类别编码: added=新增 deleted=删除 config_changed=配置修改 data_synced=数据同步更新 rows_changed=行数变化 upstream_changed=上游表变化 folder_changed=文件夹变更',
+    change_type_name    VARCHAR(64)  COMMENT '变更类别中文名(与change_type一一对应)',
+    changed_fields      VARCHAR(2000) COMMENT '发生变化的字段名列表(逗号分隔; 删除时=DELETED)',
+    diff_json           TEXT         COMMENT '变更明细JSON(字段名->新旧值映射, 删除时=DELETED)',
+    folder_path         VARCHAR(512) COMMENT '数据集所属文件夹路径(变更后)',
+    remark              VARCHAR(512) COMMENT '备注(如: 连续N天未同步/行数异常波动等衍生告警)'
+) ENGINE=OLAP
+UNIQUE KEY(dt, change_id)
+COMMENT 'DataWind数据集变更日志(i_d): 由快照自比对生成, 每类变化一条, 按日累积全量历史可追溯; 同日重跑幂等不重复'
+PARTITION BY RANGE(dt) ()
+DISTRIBUTED BY HASH(change_id) BUCKETS 4
+PROPERTIES (
+    "dynamic_partition.enable" = "true",
+    "dynamic_partition.time_unit" = "DAY",
+    "dynamic_partition.start" = "-90",
+    "dynamic_partition.end" = "3",
+    "dynamic_partition.prefix" = "p",
+    "dynamic_partition.replication_num" = "2",
+    "replication_num" = "2"
+);
+
+-- ---------------------------------------------------------------------
+-- 表3: etl.dim_datawind_folder_s_d  文件夹树每日快照（_s_d 每日快照, 分区表）
+-- 每日全量写入; 数据集 folder_id 关联此表解析 folder_path 层级
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS etl.dim_datawind_folder_s_d (
+    dt                      DATE         NOT NULL COMMENT '数据日期(分区键)=抓取日',
+    folder_id               BIGINT       NOT NULL COMMENT '文件夹ID(DataWind全局唯一, public/private共用)',
+    etl_time                DATETIME     NOT NULL COMMENT '数据处理时间',
+    parent_id               BIGINT       COMMENT '父文件夹ID(NULL=顶层)',
+    folder_name             VARCHAR(256) COMMENT '文件夹名称',
+    folder_path             VARCHAR(1024) COMMENT '文件夹完整路径(如 ZamLoan/zamloan2.0; 由树逐级拼接)',
+    namespace               VARCHAR(16)  COMMENT '命名空间: public=公共文件夹 private=私有文件夹'
+) ENGINE=OLAP
+UNIQUE KEY(dt, folder_id)
+COMMENT 'DataWind文件夹树每日快照(s_d): 每日全量写入, dt分区+etl_time; 数据集folder_id关联此表解析folder_path'
+PARTITION BY RANGE(dt) ()
+DISTRIBUTED BY HASH(folder_id) BUCKETS 4
+PROPERTIES (
+    "dynamic_partition.enable" = "true",
+    "dynamic_partition.time_unit" = "DAY",
+    "dynamic_partition.start" = "-30",
+    "dynamic_partition.end" = "3",
+    "dynamic_partition.prefix" = "p",
+    "dynamic_partition.replication_num" = "2",
+    "replication_num" = "2"
+);
+
+-- =====================================================================
+-- 变更识别核心 SQL（每天落完快照后执行, 与昨天分区自比对）
+-- =====================================================================
+
+-- ① 新增: 今天有昨天无
+-- INSERT INTO etl.dwd_datawind_dataset_change_i_d
+-- SELECT t1.dt, NOW(), 1, t1.dataset_id, t1.name, 'added', '新增', 'ALL',
+--        JSON_OBJECT('new', ...), t1.folder_path, NULL
+-- FROM etl.ods_datawind_dataset_s_d t1
+-- LEFT JOIN etl.ods_datawind_dataset_s_d t0
+--   ON t1.dataset_id = t0.dataset_id AND t0.dt = DATE_SUB(t1.dt, 1)
+-- WHERE t1.dt = CURDATE() AND t0.dataset_id IS NULL;
+
+-- ② 删除: 昨天有今天无
+-- SELECT t0.dataset_id, t0.name FROM etl.ods_datawind_dataset_s_d t0
+-- LEFT JOIN etl.ods_datawind_dataset_s_d t1
+--   ON t0.dataset_id = t1.dataset_id AND t1.dt = DATE_ADD(t0.dt, 1)
+-- WHERE t0.dt = DATE_SUB(CURDATE(), 1) AND t1.dataset_id IS NULL;
+
+-- ③ 配置修改/数据更新/行数变化/上游表变化/文件夹变更:
+--    两日都有, 按字段域对比, 每命中一个域写一条 change_type
+
+-- 常用质检 SQL:
+-- 连续N天未同步: SELECT dataset_id, COUNT(DISTINCT dt) FROM snapshot
+--                WHERE last_success_task_time < DATE_SUB(CURDATE(), INTERVAL 3 DAY) GROUP BY dataset_id;
+-- 文件夹维度统计: SELECT folder_path, COUNT(*) FROM snapshot WHERE dt=CURDATE() GROUP BY folder_path;
+-- 行数异常波动:   今天 rows_last_success 与昨天比值 >5 或 <0.2 的数据集

@@ -1,0 +1,51 @@
+# ===== 敏感信息（禁止入库）=====
+# 真实凭证/密钥（正式配置不入库, 部署时从安全渠道获取后放入 config/）
+config/datawind_monitor_config.json
+*.secret
+.env
+
+# ===== 运行产物 =====
+logs/
+datawind_poll_baseline.json
+datawind_poll_baseline.json.tmp
+poll_5min.lock
+__pycache__/
+*.pyc
+
+# ===== 探索期临时脚本（含硬编码凭证, 仅本地保留）=====
+probe_*.py
+verify_*.py
+diag_*.py
+test_*.py
+ddl_test*.py
+pl_perm_test.py
+run_8priv_sql.py
+alter_schedule_day.py
+calc_login_funnel.py
+datawind_api_full_probe.py
+datawind_api_probe_supplement.py
+datawind_dataset_mgr.py
+datawind_doris_monitor.py
+doris_connect_test.py
+enum_stats.py
+fetch_sample.py
+show_sample.py
+zamloan_inventory.py
+verify_landing.py
+verify_fill_feasibility.py
+test_group_concat.py
+
+# ===== 数据采样/中间产物 =====
+dataset_list_full.json
+datawind_dataset_sample.json
+artifacts/
+draft_11fcd0d7_folder/
+doc-fetch-resources/
+ZamLoan数据资产盘点/
+zamloan_健康度分析/
+
+# ===== IDE/系统 =====
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
