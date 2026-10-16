@@ -20,6 +20,7 @@ import argparse
 import json
 import logging
 import os
+import signal
 import sys
 import time
 from logging.handlers import TimedRotatingFileHandler
@@ -57,22 +58,68 @@ def setup_logger():
     return logger
 
 
+def _pid_alive(pid):
+    """探测 PID 是否存活(跨平台; Windows 用 tasklist 探测, Linux 用 kill 0)"""
+    if os.name == "nt":
+        try:
+            import subprocess
+            r = subprocess.run(["tasklist", "/FI", "PID eq %d" % pid],
+                               capture_output=True, text=True, timeout=10)
+            return str(pid) in r.stdout
+        except Exception:
+            return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ProcessLookupError):
+        return False
+
+
 def acquire_lock():
-    """单例互斥: O_EXCL 创建锁文件, 失败说明已有实例"""
+    """单例互斥: 锁文件记录 PID; 若文件存在但 PID 已死(残留锁)则自动抢占"""
+    global _lock_fd
+    if os.path.exists(LOCK_FILE):
+        try:
+            with open(LOCK_FILE, "r", encoding="utf-8") as f:
+                old_pid = int(f.read().strip() or 0)
+            if old_pid and _pid_alive(old_pid):
+                return False  # 另一个实例存活
+            # 残留锁: 旧进程已退出, 抢占
+            os.remove(LOCK_FILE)
+        except (ValueError, OSError):
+            pass
     try:
         fd = os.open(LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         os.write(fd, str(os.getpid()).encode())
         os.close(fd)
+        _lock_fd = fd
         return True
     except FileExistsError:
         return False
 
 
+_lock_fd = None
+
+
 def release_lock():
+    global _lock_fd
     try:
-        os.remove(LOCK_FILE)
-    except OSError:
+        if _lock_fd:
+            os.close(_lock_fd)
+            _lock_fd = None
+        if os.path.exists(LOCK_FILE):
+            with open(LOCK_FILE, "r", encoding="utf-8") as f:
+                pid = int(f.read().strip() or 0)
+            if pid == os.getpid():
+                os.remove(LOCK_FILE)
+    except (ValueError, OSError):
         pass
+
+
+def _signal_handler(signum, frame):
+    """SIGTERM/SIGINT: 清理锁后退出(避免 systemd 重启时残留锁)"""
+    release_lock()
+    sys.exit(0)
 
 
 def load_baseline():
@@ -171,6 +218,8 @@ def main():
     if not acquire_lock():
         print("已有 poll_5min 实例在运行, 本实例退出 (锁: %s)" % LOCK_FILE)
         sys.exit(0)
+    signal.signal(signal.SIGTERM, _signal_handler)
+    signal.signal(signal.SIGINT, _signal_handler)
     logger = setup_logger()
     logger.info("poll_5min 启动: interval=%ds, once=%s", args.interval, args.once)
 
