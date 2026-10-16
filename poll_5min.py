@@ -41,6 +41,9 @@ RUN_DAILY = os.path.join(BASE_DIR, "run_daily.py")
 
 TBL_CHANGE = "{db}.dwd_datawind_dataset_change_i_d"
 TBL_SNAPSHOT = "{db}.ods_datawind_dataset_s_d"
+TBL_TBL_LINEAGE = "{db}.dwd_datawind_table_lineage_t_d"
+TBL_COL_LINEAGE = "{db}.dwd_datawind_column_lineage_t_d"
+TBL_CLOSURE = "{db}.dwd_datawind_lineage_closure_t_d"
 
 # 熔断参数
 MAX_CONSEC_FAIL = 5      # 连续失败 N 次进入熔断
@@ -188,6 +191,83 @@ def write_changes(doris, changes, logger):
         "[%s]%s" % (names.get(c, c), r) for c, _, r, _ in changes))
 
 
+def sync_lineage_incremental(client, doris, ids_to_sync, logger):
+    """轮询增量血缘同步（P1-3）: 对新增/mtime变化的数据集重新解析血缘
+
+    语义（与每日全量一致）:
+      - 先 DELETE 当日分区该数据集的血缘行(表级/字段级/闭包), 再 INSERT 最新解析结果
+        (UNIQUE KEY 幂等但只覆盖同key; 若上游表集合收缩, 旧key会残留, 必须整集删除重插)
+      - 失败仅记日志, 不阻塞轮询主流程; 每日全量仍兜底全量重建
+    返回成功同步的数据集数
+    """
+    from datawind.lineage import LineageParser, normalize_column_edge
+    if not ids_to_sync:
+        return 0
+    parser = LineageParser()
+    dt = time.strftime("%Y-%m-%d")
+    etl_time = time.strftime("%Y-%m-%d %H:%M:%S")
+    synced = 0
+    for dsid in ids_to_sync:
+        try:
+            dsid_int = int(dsid)
+        except (ValueError, TypeError):
+            logger.warning("血缘增量同步[%s] 非数字数据集ID, 跳过", dsid)
+            continue
+        try:
+            try:
+                sql, srcs, _ = client.model_logic(dsid_int)
+            except Exception as e:
+                logger.warning("血缘增量同步[%s] 拉取加工SQL失败: %s", dsid, e)
+                continue
+            if not sql:
+                continue
+            tables, cols, st = parser.parse_multi(sql, dsid_int)
+        except Exception as e:
+            logger.warning("血缘增量同步[%s] 解析异常: %s", dsid, e)
+            continue
+        if st["parse_status"] == "fail":
+            logger.warning("血缘增量同步[%s] 解析失败: %s", dsid, st.get("err"))
+            continue
+        table_set = set(tables)
+        for s in (srcs or "").split(","):
+            s = s.strip()
+            if s:
+                table_set.add(s)
+        t_rows, c_rows, cl_rows = [], [], []
+        for t in sorted(table_set):
+            db, tb = t.rsplit(".", 1) if "." in t else (None, t)
+            t_rows.append((dt, dsid_int, t, "direct", 0, etl_time))
+            cl_rows.append((dt, dsid_int, db, tb, 1, t, etl_time))
+        for edge in cols:
+            n = normalize_column_edge(edge, dsid_int)
+            c_rows.append((dt, dsid_int, n["target_field"], n["src_table"],
+                           n["src_field"], n["confidence"], etl_time))
+        # 整集删除重插: 避免上游表集合收缩时旧 key 残留
+        try:
+            for tbl in (TBL_TBL_LINEAGE, TBL_COL_LINEAGE, TBL_CLOSURE):
+                doris.exec("DELETE FROM %s WHERE dt = %%s AND dataset_id = %%s"
+                           % tbl.format(db=doris.db), (dt, dsid_int))
+            if t_rows:
+                doris.execmany(
+                    "INSERT INTO %s (dt, dataset_id, db_table, lineage_type, depth, etl_time) "
+                    "VALUES (%%s,%%s,%%s,%%s,%%s,%%s)" % TBL_TBL_LINEAGE.format(db=doris.db), t_rows)
+            if c_rows:
+                doris.execmany(
+                    "INSERT INTO %s (dt, dataset_id, target_field, src_table, src_field, confidence, etl_time) "
+                    "VALUES (%%s,%%s,%%s,%%s,%%s,%%s,%%s)" % TBL_COL_LINEAGE.format(db=doris.db), c_rows)
+            if cl_rows:
+                doris.execmany(
+                    "INSERT INTO %s (dt, dataset_id, up_db, up_table, hop_depth, lineage_path, etl_time) "
+                    "VALUES (%%s,%%s,%%s,%%s,%%s,%%s,%%s)" % TBL_CLOSURE.format(db=doris.db), cl_rows)
+            synced += 1
+            logger.info("血缘增量同步[%s] 完成: 表边%d 字段边%d 闭包%d",
+                        dsid, len(t_rows), len(c_rows), len(cl_rows))
+        except Exception as e:
+            logger.error("血缘增量同步[%s] 落库失败: %s (该数据集血缘待下次轮询/每日全量纠正)", dsid, e)
+    logger.info("血缘增量同步汇总: %d/%d 数据集 (dt=%s)", synced, len(ids_to_sync), dt)
+    return synced
+
+
 def _today_utc():
     return time.strftime("%Y-%m-%d", time.gmtime())
 
@@ -263,6 +343,10 @@ def poll_once(client, doris, baseline, logger):
                             {"mtime": {"old": old.get("mtime"), "new": d["mtime"]}}))
     write_changes(doris, changes, logger)
     save_baseline(current)
+    # 增量血缘同步: 新增/元数据修改的数据集重新解析(重接口按需, 不阻塞主流程)
+    ids_to_sync = [rid for ct, rid, _, _ in changes if ct in ("added", "mtime_changed")]
+    if ids_to_sync:
+        sync_lineage_incremental(client, doris, ids_to_sync, logger)
     logger.info("轮询完成: 数据集=%d, 变更=%d (基线已更新)", len(current), len(changes))
     return len(changes)
 
@@ -287,8 +371,11 @@ def main():
         client = DataWindClient(cfg)
         doris = Doris(cfg)
         doris.connect()
-        # 幂等建表(变更表; 快照表每日脚本建, 轮询只写变更表)
+        # 幂等建表(变更表; 快照表每日脚本建, 轮询只写变更表; 血缘三表供增量同步)
         doris.create_table(ddl_mod.DDL_CHANGE.format(db=doris.db))
+        doris.create_table(ddl_mod.DDL_TABLE_LINEAGE.format(db=doris.db))
+        doris.create_table(ddl_mod.DDL_COLUMN_LINEAGE.format(db=doris.db))
+        doris.create_table(ddl_mod.DDL_CLOSURE.format(db=doris.db))
 
         baseline = load_baseline()
         consec_fail = 0
