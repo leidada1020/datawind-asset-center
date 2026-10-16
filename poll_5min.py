@@ -133,6 +133,13 @@ def write_changes(doris, changes, logger):
 def poll_once(client, doris, baseline, logger):
     ds_list = client.list_datasets()
     current = build_current(ds_list)
+
+    # 首次运行(基线为空): 仅建立基线, 不写变更(避免 338 条全量"新增"噪音)
+    if not baseline:
+        save_baseline(current)
+        logger.info("首次轮询: 建立基线 %d 个数据集(不写入变更)", len(current))
+        return 0
+
     changes = []
     # 新增
     for i, d in current.items():
