@@ -144,3 +144,94 @@ PROPERTIES (
 --                WHERE last_success_task_time < DATE_SUB(CURDATE(), INTERVAL 3 DAY) GROUP BY dataset_id;
 -- 文件夹维度统计: SELECT folder_path, COUNT(*) FROM snapshot WHERE dt=CURDATE() GROUP BY folder_path;
 -- 行数异常波动:   今天 rows_last_success 与昨天比值 >5 或 <0.2 的数据集
+
+-- =====================================================================
+-- P1 血缘三表（SQLGlot 解析加工 SQL 产出; run_daily.py 内幂等自建, 此处为设计稿同步）
+-- =====================================================================
+
+-- 表级血缘: 数据集 -> 上游来源表（SQLGlot 解析 + 接口 sourceTableList 双源合并）
+CREATE TABLE IF NOT EXISTS etl.dwd_datawind_table_lineage_t_d (
+    dt                  DATE         NOT NULL COMMENT '血缘快照日(分区键)=抓取日',
+    dataset_id          BIGINT       NOT NULL COMMENT '数据集ID(下游, 消费侧)',
+    db_table            VARCHAR(256) NOT NULL COMMENT '上游来源表 db.table(如 mv.ods_zamloan_orderinfo_i_d; 无库名时=table)',
+    lineage_type        VARCHAR(16)  COMMENT '血缘类型: direct=直接加工引用(加工SQL解析) api=接口上游表(sourceTableList)',
+    depth               TINYINT      COMMENT '血缘层级(预留: 0=直接上游, N=多跳; 当前恒0, 闭包表负责多跳)',
+    etl_time            DATETIME     NOT NULL COMMENT '数据处理时间'
+) ENGINE=OLAP
+UNIQUE KEY(dt, dataset_id, db_table)
+COMMENT 'DataWind表级血缘(t_d): 数据集->上游表, SQLGlot解析+接口sourceTableList双源合并; 按dt累积可回溯历史血缘; 闭包表在此表基础上预计算多跳'
+PARTITION BY RANGE(dt) ()
+DISTRIBUTED BY HASH(dataset_id) BUCKETS 8
+PROPERTIES (
+    "dynamic_partition.enable" = "true",
+    "dynamic_partition.time_unit" = "DAY",
+    "dynamic_partition.start" = "-180",
+    "dynamic_partition.end" = "3",
+    "dynamic_partition.prefix" = "p",
+    "dynamic_partition.replication_num" = "2",
+    "replication_num" = "2"
+);
+
+-- 字段级血缘: 目标字段 <- 来源表.来源字段（SQLGlot 解析, 参考 DataHub fine-grained lineage）
+CREATE TABLE IF NOT EXISTS etl.dwd_datawind_column_lineage_t_d (
+    dt                  DATE         NOT NULL COMMENT '血缘快照日(分区键)=抓取日',
+    dataset_id          BIGINT       NOT NULL COMMENT '数据集ID(下游)',
+    target_field        VARCHAR(256) NOT NULL COMMENT '目标字段(数据集输出列, 加工SQL的SELECT别名)',
+    src_table           VARCHAR(256) COMMENT '来源表 db.table(无表名=SQL内子查询/表达式, 留空)',
+    src_field           VARCHAR(256) COMMENT '来源字段(无则=常量/聚合, 留空)',
+    confidence          VARCHAR(8)   COMMENT '置信度: high=直接列引用(目标=源列一一对应) medium=表达式/函数/CTE推导 pending=无法提取(常量/复杂表达式), 前端分级展示',
+    etl_time            DATETIME     NOT NULL COMMENT '数据处理时间'
+) ENGINE=OLAP
+UNIQUE KEY(dt, dataset_id, target_field, src_table, src_field)
+COMMENT 'DataWind字段级血缘(t_d): 目标字段<-来源表.来源字段, SQLGlot解析加工SQL提取; 模型参考DataHub fine-grained lineage(边+置信度); pending边前端标灰供人工补'
+PARTITION BY RANGE(dt) ()
+DISTRIBUTED BY HASH(dataset_id) BUCKETS 8
+PROPERTIES (
+    "dynamic_partition.enable" = "true",
+    "dynamic_partition.time_unit" = "DAY",
+    "dynamic_partition.start" = "-180",
+    "dynamic_partition.end" = "3",
+    "dynamic_partition.prefix" = "p",
+    "dynamic_partition.replication_num" = "2",
+    "replication_num" = "2"
+);
+
+-- 血缘解析质量统计: 每日一行, 观察解析率与置信度分布
+CREATE TABLE IF NOT EXISTS etl.dwd_datawind_parse_stat_s_d (
+    dt                  DATE         NOT NULL COMMENT '统计日(分区键)=抓取日',
+    etl_time            DATETIME     NOT NULL COMMENT '数据处理时间',
+    total_cnt           INT          NOT NULL COMMENT '待解析数据集总数(有加工SQL)',
+    parsed_cnt          INT          COMMENT '解析成功数(parse_status=ok或partial)',
+    pending_cnt         INT          COMMENT '无加工SQL/直连数据集数(不参与解析)',
+    fail_cnt            INT          COMMENT '解析失败数(所有方言均失败)',
+    high_conf_cnt       INT          COMMENT '高置信字段血缘边数',
+    medium_conf_cnt     INT          COMMENT '中置信字段血缘边数',
+    pending_conf_cnt    INT          COMMENT 'pending字段血缘边数(需人工补)',
+    table_edge_cnt      INT          COMMENT '表级血缘边总数(去重)',
+    column_edge_cnt     INT          COMMENT '字段级血缘边总数(去重)'
+) ENGINE=OLAP
+UNIQUE KEY(dt)
+COMMENT 'DataWind血缘解析质量统计(s_d): 每日一行, 观察解析率与置信度分布, 超阈值触发告警'
+PARTITION BY RANGE(dt) ()
+DISTRIBUTED BY HASH(dt) BUCKETS 2
+PROPERTIES (
+    "dynamic_partition.enable" = "true",
+    "dynamic_partition.time_unit" = "DAY",
+    "dynamic_partition.start" = "-30",
+    "dynamic_partition.end" = "3",
+    "dynamic_partition.prefix" = "p",
+    "dynamic_partition.replication_num" = "2",
+    "replication_num" = "2"
+);
+
+-- 血缘常用质检 SQL:
+-- 解析率: SELECT parsed_cnt/total_cnt, fail_cnt FROM etl.dwd_datawind_parse_stat_s_d WHERE dt=CURDATE();
+-- 某数据集上游表: SELECT db_table FROM etl.dwd_datawind_table_lineage_t_d WHERE dt=CURDATE() AND dataset_id=10618132;
+-- 某字段来源:   SELECT src_table, src_field, confidence FROM etl.dwd_datawind_column_lineage_t_d
+--               WHERE dt=CURDATE() AND dataset_id=10618132 AND target_field='loan_amount';
+-- 上游表变化(今日vs昨日): SELECT a.dataset_id, a.db_table FROM t_d a
+--               LEFT JOIN t_d b ON a.dataset_id=b.dataset_id AND b.dt=DATE_SUB(a.dt,1)
+--               WHERE a.dt=CURDATE() AND b.db_table IS NULL;  -- 新增来源表
+-- 低置信血缘(需人工补): SELECT dataset_id, target_field, src_table, src_field
+--               FROM etl.dwd_datawind_column_lineage_t_d
+--               WHERE dt=CURDATE() AND confidence='pending' LIMIT 100;

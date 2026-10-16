@@ -38,6 +38,7 @@ test_group_concat.py
 # ===== 数据采样/中间产物 =====
 dataset_list_full.json
 datawind_dataset_sample.json
+lineage_probe_report.json
 artifacts/
 draft_11fcd0d7_folder/
 doc-fetch-resources/
