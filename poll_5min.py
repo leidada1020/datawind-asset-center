@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import signal
+import subprocess
 import sys
 import time
 from logging.handlers import TimedRotatingFileHandler
@@ -35,6 +36,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOCK_FILE = os.path.join(BASE_DIR, "poll_5min.lock")
 BASELINE_FILE = os.path.join(BASE_DIR, "datawind_poll_baseline.json")
 LOG_FILE = os.path.join(BASE_DIR, "logs", "poll_5min.log")
+DAILY_MARK_DIR = os.path.join(BASE_DIR, "logs", "daily_marks")
+RUN_DAILY = os.path.join(BASE_DIR, "run_daily.py")
 
 TBL_CHANGE = "{db}.dwd_datawind_dataset_change_i_d"
 TBL_SNAPSHOT = "{db}.ods_datawind_dataset_s_d"
@@ -42,6 +45,9 @@ TBL_SNAPSHOT = "{db}.ods_datawind_dataset_s_d"
 # 熔断参数
 MAX_CONSEC_FAIL = 5      # 连续失败 N 次进入熔断
 COOLDOWN_SEC = 1800      # 熔断休息 30 分钟
+
+# 每日全量调度（应用内自触发, 不依赖 cron/systemd）
+DAILY_HOUR_UTC = 10      # 每日 UTC 10:30 触发 run_daily（部署机 UTC 时区）
 
 
 def setup_logger():
@@ -180,6 +186,54 @@ def write_changes(doris, changes, logger):
         "[%s]%s" % (names.get(c, c), r) for c, _, r, _ in changes))
 
 
+def _today_utc():
+    return time.strftime("%Y-%m-%d", time.gmtime())
+
+
+def _daily_mark_file(today):
+    return os.path.join(DAILY_MARK_DIR, today)
+
+
+def _daily_done(today):
+    return os.path.exists(_daily_mark_file(today))
+
+
+def _mark_daily_done(today):
+    os.makedirs(DAILY_MARK_DIR, exist_ok=True)
+    with open(_daily_mark_file(today), "w", encoding="utf-8") as f:
+        f.write(time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()))
+
+
+def run_daily_if_due(logger, force=False):
+    """应用内每日调度: UTC 10:30 后触发 run_daily.py 全量落库(当日仅一次)
+
+    - 标记文件防重复; 进程启动时若已过点且当日未跑, 自动补跑(catch-up)
+    - 子进程独立运行, 失败不阻塞轮询主循环
+    """
+    today = _today_utc()
+    if not force and _daily_done(today):
+        return False
+    if not force:
+        now = time.gmtime()
+        if (now.tm_hour, now.tm_min) < (DAILY_HOUR_UTC, 30):
+            return False
+    logger.info("触发每日全量落库(run_daily.py, date=%s)...", today)
+    try:
+        proc = subprocess.run(
+            [sys.executable, RUN_DAILY, "--date", today],
+            capture_output=True, text=True, timeout=1800)
+        tail = (proc.stdout or "")[-800:]
+        if proc.returncode == 0:
+            _mark_daily_done(today)
+            logger.info("每日全量完成(exit=0): %s", tail.replace("\n", " ")[-400:])
+        else:
+            logger.error("每日全量失败(exit=%s): %s",
+                         proc.returncode, (tail + (proc.stderr or ""))[-400:])
+    except Exception as e:
+        logger.error("每日全量异常: %s", e)
+    return True
+
+
 def poll_once(client, doris, baseline, logger):
     ds_list = client.list_datasets()
     current = build_current(ds_list)
@@ -236,6 +290,8 @@ def main():
 
         baseline = load_baseline()
         consec_fail = 0
+        # 启动时 catch-up: 已过每日触发点且当日未跑 -> 立即补跑
+        run_daily_if_due(logger)
         while True:
             t0 = time.time()
             try:
@@ -256,6 +312,8 @@ def main():
 
             if args.once:
                 break
+            # 每日调度检查(UTC 10:30 后触发一次全量)
+            run_daily_if_due(logger)
             # 补偿运行耗时, 保持稳定间隔
             elapsed = time.time() - t0
             time.sleep(max(1, sleep - elapsed))
