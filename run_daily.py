@@ -315,16 +315,22 @@ def main():
             print("    [警告] 血缘解析失败, 已跳过(不影响快照): %s" % e)
 
     if changes:
+        # 编号从当日现有 MAX(change_id)+1 开始: 避免覆盖轮询已写入的变更(UNIQUE KEY(dt,change_id))
+        # 顺序: 先查MAX(含轮询记录) -> 再删自己当日记录 -> 从max_id+1插入
+        rows = doris.exec("SELECT COALESCE(MAX(change_id), 0) FROM %s WHERE dt = %%s"
+                          % TBL_CHANGE.format(db=doris.db), (stat_date,), fetch=True)
+        max_id = rows[0][0] if rows and rows[0] else 0
         # 只清删本脚本当日写入(remark='每日全量')的记录, 保留 5 分钟轮询写入的变更
         doris.exec("DELETE FROM %s WHERE dt = %%s AND remark = '每日全量'"
                    % TBL_CHANGE.format(db=doris.db), (stat_date,))
         ins = "INSERT INTO %s (dt, etl_time, change_id, dataset_id, dataset_name, change_type, change_type_name, changed_fields, diff_json, folder_path, remark) VALUES (%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s)" % TBL_CHANGE.format(db=doris.db)
         ins_rows = []
-        for cid, (ct, rid, rname, cfields, diff, fpath) in enumerate(changes, start=1):
+        for cid, (ct, rid, rname, cfields, diff, fpath) in enumerate(changes, start=max_id + 1):
             ins_rows.append((stat_date, etl_time, cid, rid, rname, ct,
                              models.CHANGE_NAMES.get(ct, ct), cfields, diff, fpath, "每日全量"))
         doris.execmany(ins, ins_rows)
-        print("==> 变更日志写入 %d 条 (remark=每日全量)" % len(changes))
+        print("==> 变更日志写入 %d 条 (remark=每日全量, change_id从%d起)"
+              % (len(changes), max_id + 1))
     else:
         print("==> 与 %s 相比无变化(或首次基线, 无对比)" % (prev_date or "无"))
 
