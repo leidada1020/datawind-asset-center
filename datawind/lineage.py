@@ -36,15 +36,18 @@ class LineageParser:
 
     # ---------- 表级 ----------
     def _tables(self, ast):
-        """AST -> 上游表集合 {db.table | table}（排除子查询别名表）"""
+        """AST -> 上游表集合 {db.table | table}
+
+        过滤 CTE 名引用(如 FROM cte_name, 非真实上游表);
+        子查询内真实表(如 FROM (SELECT ... FROM ods.t) x 中的 ods.t)正常保留
+        """
         tables = set()
+        cte_names = {c.alias for c in ast.find_all(exp.CTE)}
         for t in ast.find_all(exp.Table):
-            # 跳过 CTE/子查询别名（如 WITH x AS (...) 中的 x）
-            if isinstance(t.parent, exp.Subquery):
+            name = t.name or ""
+            if not name or name in cte_names:
                 continue
-            db, name = t.db or "", t.name or ""
-            if not name:
-                continue
+            db = t.db or ""
             tables.add(("%s.%s" % (db, name)) if db else name)
         return tables
 

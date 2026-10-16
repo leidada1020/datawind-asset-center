@@ -46,10 +46,11 @@ def load_config(path=None):
     if missing:
         raise RuntimeError("配置缺失字段: %s" % ", ".join(missing))
 
-    # Doris 默认值（config 文件可不含 Doris 段，沿用既有连接）
-    cfg.setdefault("doris_host", "203.123.86.71")
-    cfg.setdefault("doris_port", 9030)
-    cfg.setdefault("doris_user", "pl")
-    cfg.setdefault("doris_password", "m!s6uDY+!wHepi@WIWs+")
-    cfg.setdefault("doris_db", "etl")
+    # Doris 连接信息必须来自配置文件(host/port/user/password/db)，缺失即报错
+    # （不硬编码默认值: 连接口令属于敏感信息, 不入代码库; 模板见 config/*.example.json）
+    doris_required = ["doris_host", "doris_port", "doris_user", "doris_password", "doris_db"]
+    doris_missing = [k for k in doris_required if not cfg.get(k)]
+    if doris_missing:
+        raise RuntimeError("Doris 配置缺失字段: %s（请在配置文件补齐, 参考 example 模板）" % ", ".join(doris_missing))
+    cfg["doris_port"] = int(cfg["doris_port"])
     return cfg

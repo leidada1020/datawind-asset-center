@@ -315,14 +315,16 @@ def main():
             print("    [警告] 血缘解析失败, 已跳过(不影响快照): %s" % e)
 
     if changes:
-        doris.exec("DELETE FROM %s WHERE dt = %%s" % TBL_CHANGE.format(db=doris.db), (stat_date,))
+        # 只清删本脚本当日写入(remark='每日全量')的记录, 保留 5 分钟轮询写入的变更
+        doris.exec("DELETE FROM %s WHERE dt = %%s AND remark = '每日全量'"
+                   % TBL_CHANGE.format(db=doris.db), (stat_date,))
         ins = "INSERT INTO %s (dt, etl_time, change_id, dataset_id, dataset_name, change_type, change_type_name, changed_fields, diff_json, folder_path, remark) VALUES (%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s)" % TBL_CHANGE.format(db=doris.db)
         ins_rows = []
         for cid, (ct, rid, rname, cfields, diff, fpath) in enumerate(changes, start=1):
             ins_rows.append((stat_date, etl_time, cid, rid, rname, ct,
-                             models.CHANGE_NAMES.get(ct, ct), cfields, diff, fpath, None))
+                             models.CHANGE_NAMES.get(ct, ct), cfields, diff, fpath, "每日全量"))
         doris.execmany(ins, ins_rows)
-        print("==> 变更日志写入 %d 条" % len(changes))
+        print("==> 变更日志写入 %d 条 (remark=每日全量)" % len(changes))
     else:
         print("==> 与 %s 相比无变化(或首次基线, 无对比)" % (prev_date or "无"))
 

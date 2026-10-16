@@ -49,9 +49,15 @@ class DataWindClient:
             return json.loads(resp.read().decode("utf-8"))
 
     def jwt(self, force=False):
-        """JWT 缓存复用（1h 有效）"""
+        """JWT 缓存复用（1h 有效, 到期前 300s 自动刷新）
+
+        长驻进程(轮询)必须自动续期: 否则 1h 后全部请求 401, 连续失败触发熔断
+        """
+        now = time.time()
         if self._jwt and not force:
-            return self._jwt
+            expire_at = getattr(self, "_jwt_expire_at", 0)
+            if expire_at - 300 > now:  # 剩余 >5min 直接复用
+                return self._jwt
         body = {"metadata": {
             "clientId": self.cfg["client_id"],
             "clientSecret": self.cfg["client_secret"],
@@ -63,6 +69,7 @@ class DataWindClient:
         if r.get("code") != "aeolus/ok":
             raise RuntimeError("换取JWT失败: %s %s" % (r.get("code"), r.get("msg")))
         self._jwt = r["data"]["jwtToken"]
+        self._jwt_expire_at = now + int(self.cfg.get("expire", 3600))
         return self._jwt
 
     # ---------- 数据集 ----------
