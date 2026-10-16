@@ -57,10 +57,12 @@ def setup_logger():
     fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
     fh = TimedRotatingFileHandler(LOG_FILE, when="midnight", backupCount=30, encoding="utf-8")
     fh.setFormatter(fmt)
-    sh = logging.StreamHandler(sys.stdout)
-    sh.setFormatter(fmt)
     logger.addHandler(fh)
-    logger.addHandler(sh)
+    # stdout 非终端(如 nohup 重定向到日志文件)时不挂 StreamHandler, 避免日志双写
+    if sys.stdout.isatty():
+        sh = logging.StreamHandler(sys.stdout)
+        sh.setFormatter(fmt)
+        logger.addHandler(sh)
     return logger
 
 

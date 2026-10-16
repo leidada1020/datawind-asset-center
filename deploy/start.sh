@@ -17,7 +17,8 @@ fi
 rm -f $PID_FILE
 
 # nohup 启动(常驻, 应用目录内管理, 不注册任何系统服务)
-nohup $VENV $APP/poll_5min.py "$@" >> $LOG_FILE 2>&1 &
+# 日志由 poll_5min.py 内部 FileHandler 写 logs/poll_5min.log, stdout 丢弃避免双写
+nohup $VENV $APP/poll_5min.py "$@" > /dev/null 2>&1 &
 echo $! > $PID_FILE
 sleep 3
 echo "poll_5min 已启动 (PID $(cat $PID_FILE)), 日志: $LOG_FILE"
