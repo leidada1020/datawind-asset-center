@@ -34,6 +34,25 @@ zamloan_inventory.py
 verify_landing.py
 verify_fill_feasibility.py
 test_group_concat.py
+analyze_dolphin_jobs.py
+
+# ===== 探索期输出/截图/杂散（仅本地保留）=====
+*_out.txt
+*_out2.txt
+*_out3.txt
+*_out4.txt
+*_out5.txt
+*_out6.txt
+*_out7.txt
+*_out8.txt
+*_out9.txt
+*.png
+*.jpg
+*.mmd
+ts_*.ps1
+GhostTrack/
+sheets/
+draft_*/
 
 # ===== 数据采样/中间产物 =====
 dataset_list_full.json
