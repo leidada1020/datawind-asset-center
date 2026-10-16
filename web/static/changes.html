@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>变更监控 - DataWind 资产中心</title>
+<style>
+:root{--main:#1a6d8a;--bg:#f5f7fa;--card:#fff;--line:#e2e8f0;--text:#1f2329;--sub:#646a73;--accent:#d97706;}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);}
+header{background:#fff;border-bottom:1px solid var(--line);padding:12px 24px;display:flex;align-items:center;gap:24px;}
+header h1{font-size:18px;color:var(--main);}
+header nav a{color:var(--sub);text-decoration:none;margin-right:16px;font-size:14px;}
+header nav a:hover{color:var(--main);}
+main{padding:20px 24px;max-width:1200px;margin:0 auto;}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:16px 20px;margin-bottom:20px;}
+.filters{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;}
+.filters input,.filters select{border:1px solid var(--line);border-radius:6px;padding:7px 10px;font-size:13px;background:#fff;}
+table{width:100%;border-collapse:collapse;font-size:13px;}
+th{background:#f0f4f7;color:var(--sub);text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);}
+td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top;}
+tr:hover td{background:#f8fafb;}
+a{color:var(--main);text-decoration:none;} a:hover{text-decoration:underline;}
+.t{display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px;}
+.t.added{background:#e6f4ea;color:#1a7f37;}
+.t.deleted{background:#fde8e8;color:#c0392b;}
+.t.config_changed{background:#fdf0e3;color:#b45309;}
+.t.mtime_changed{background:#e8e8fd;color:#4c46b8;}
+.t.upstream_changed{background:#e0f2fe;color:#0369a1;}
+.t.data_synced{background:#f0f4f7;color:#475569;}
+.t.rows_changed{background:#f0f4f7;color:#475569;}
+.pager{display:flex;gap:10px;align-items:center;margin-top:14px;font-size:13px;color:var(--sub);}
+.pager button{border:1px solid var(--line);background:#fff;border-radius:6px;padding:5px 12px;cursor:pointer;}
+.pager button:disabled{opacity:.4;cursor:default;}
+.chart-box{width:100%;}
+.chart-box svg{width:100%;height:auto;}
+.legend{font-size:12px;color:var(--sub);}
+</style>
+</head>
+<body>
+<header>
+  <h1>DataWind 资产中心</h1>
+  <nav><a href="/">资产目录</a><a href="/lineage">血缘查询</a><a href="/changes">变更监控</a></nav>
+</header>
+<main>
+  <div class="panel">
+    <h2>近 7 日变更趋势</h2>
+    <div class="chart-box" id="trend"></div>
+    <div class="legend">每日变更条数（含 5 分钟轮询信号与每日全量 diff）</div>
+  </div>
+  <div class="panel">
+    <h2>变更明细</h2>
+    <div class="filters">
+      <input id="date" type="date" value="" placeholder="日期">
+      <select id="type">
+        <option value="">全部类型</option>
+        <option value="added">新增</option><option value="deleted">删除</option>
+        <option value="config_changed">配置修改</option><option value="data_synced">数据同步更新</option>
+        <option value="rows_changed">行数变化</option><option value="upstream_changed">上游表变化</option>
+        <option value="folder_changed">文件夹变更</option><option value="mtime_changed">元数据修改(轮询)</option>
+      </select>
+      <button id="q" style="border:1px solid var(--line);background:#fff;border-radius:6px;padding:7px 16px;cursor:pointer;">查询</button>
+      <span style="margin-left:auto;font-size:13px;color:var(--sub);" id="totalLabel"></span>
+    </div>
+    <div style="overflow-x:auto;"><table>
+      <thead><tr><th>日期</th><th>类型</th><th>数据集</th><th>变更字段</th><th>明细</th><th>来源</th></tr></thead>
+      <tbody id="tb"></tbody>
+    </table></div>
+    <div class="pager"><button id="prevBtn">上一页</button><span id="pageLabel"></span><button id="nextBtn">下一页</button></div>
+  </div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let page = 1, total = 0;
+function esc(s){ return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+async function j(url){ const r = await fetch(url); return r.json(); }
+
+function diffText(diff){
+  if (!diff) return '';
+  const parts = [];
+  for (const k of Object.keys(diff)){
+    const v = diff[k];
+    if (v && typeof v === 'object' && ('old' in v || 'new' in v)){
+      parts.push(`${k}: ${esc(v.old ?? '-')} → ${esc(v.new ?? '-')}`);
+    } else if (typeof v === 'object'){
+      parts.push(`${k}: ${esc(JSON.stringify(v))}`);
+    } else {
+      parts.push(`${k}: ${esc(v)}`);
+    }
+  }
+  return parts.join('<br>');
+}
+
+async function loadTrend(){
+  const s = await j('/api/stats');
+  const el = $('trend');
+  if (!s.changes_7d || !s.changes_7d.length){ el.innerHTML = '<div class="empty">暂无数据</div>'; return; }
+  const W = 900, H = 180, pad = 40;
+  const data = s.changes_7d;
+  const max = Math.max(1, ...data.map(x => x.cnt));
+  const bw = (W - pad * 2) / data.length;
+  let bars = '';
+  data.forEach((x, i) => {
+    const h = (x.cnt / max) * (H - pad * 2 - 20);
+    const bx = pad + i * bw + 4, by = H - pad - h;
+    bars += `<g><rect x="${bx}" y="${by}" width="${bw - 8}" height="${h}" rx="3" fill="#1a6d8a"/>
+      <text x="${bx + (bw-8)/2}" y="${by - 6}" text-anchor="middle" font-size="11" fill="#1f2329">${x.cnt}</text>
+      <text x="${bx + (bw-8)/2}" y="${H - pad + 16}" text-anchor="middle" font-size="10" fill="#646a73">${x.dt.slice(5)}</text></g>`;
+  });
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">${bars}
+    <text x="16" y="22" font-size="12" fill="#646a73">变更数</text></svg>`;
+}
+
+async function loadList(){
+  const date = $('date').value;
+  const type = $('type').value;
+  const d = await j(`/api/changes?date=${date}&ctype=${type}&page=${page}&size=50`);
+  if (d.error){ $('tb').innerHTML = `<tr><td colspan="6" class="empty">${esc(d.error)}</td></tr>`; return; }
+  total = d.total; $('totalLabel').textContent = `共 ${total} 条`;
+  $('pageLabel').textContent = `第 ${d.page} / ${Math.max(1, Math.ceil(total/d.size))} 页`;
+  $('prevBtn').disabled = page <= 1;
+  $('nextBtn').disabled = page * d.size >= total;
+  $('tb').innerHTML = d.items.map(i => `<tr>
+    <td>${esc(i.dt)}</td>
+    <td><span class="t ${i.type}">${esc(i.type_name)}</span></td>
+    <td><a href="/dataset/${i.dataset_id}">${esc(i.name)}</a> [${i.dataset_id}]</td>
+    <td>${esc(i.fields)}</td>
+    <td>${diffText(i.diff)}</td>
+    <td>${esc(i.remark)}</td>
+  </tr>`).join('') || '<tr><td colspan="6" class="empty">无变更记录</td></tr>';
+}
+
+$('q').onclick = () => { page = 1; loadList(); };
+$('prevBtn').onclick = () => { if (page > 1){ page--; loadList(); } };
+$('nextBtn').onclick = () => { if (page * 50 < total){ page++; loadList(); } };
+loadTrend(); loadList();
+</script>
+</body>
+</html>

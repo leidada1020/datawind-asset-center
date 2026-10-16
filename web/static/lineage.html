@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>血缘查询 - DataWind 资产中心</title>
+<style>
+:root{--main:#1a6d8a;--bg:#f5f7fa;--card:#fff;--line:#e2e8f0;--text:#1f2329;--sub:#646a73;}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);}
+header{background:#fff;border-bottom:1px solid var(--line);padding:12px 24px;display:flex;align-items:center;gap:24px;}
+header h1{font-size:18px;color:var(--main);}
+header nav a{color:var(--sub);text-decoration:none;margin-right:16px;font-size:14px;}
+header nav a:hover{color:var(--main);}
+main{padding:20px 24px;max-width:1200px;margin:0 auto;}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:16px 20px;margin-bottom:20px;}
+.panel h2{font-size:15px;margin-bottom:12px;}
+.search{display:flex;gap:10px;flex-wrap:wrap;}
+.search input{border:1px solid var(--line);border-radius:6px;padding:8px 12px;font-size:14px;width:280px;}
+.search button{border:1px solid var(--line);background:#fff;border-radius:6px;padding:8px 18px;cursor:pointer;background:#1a6d8a;color:#fff;border-color:#1a6d8a;}
+table{width:100%;border-collapse:collapse;font-size:13px;}
+th{background:#f0f4f7;color:var(--sub);text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);}
+td{padding:8px 10px;border-bottom:1px solid var(--line);}
+tr:hover td{background:#f8fafb;}
+a{color:var(--main);text-decoration:none;} a:hover{text-decoration:underline;}
+.big{font-size:30px;font-weight:600;color:var(--main);}
+.empty{color:var(--sub);text-align:center;padding:30px;}
+.tips{font-size:12px;color:var(--sub);margin-top:8px;}
+</style>
+</head>
+<body>
+<header>
+  <h1>DataWind 资产中心</h1>
+  <nav><a href="/">资产目录</a><a href="/lineage">血缘查询</a><a href="/changes">变更监控</a></nav>
+</header>
+<main>
+  <div class="panel">
+    <h2>表的下游影响面（表 → 引用它的数据集）</h2>
+    <div class="search">
+      <input id="db" placeholder="库名(可选, 如 mv / ods / dim)">
+      <input id="table" placeholder="表名(必填, 支持模糊, 如 ods_zamloan_orderinfo)">
+      <button id="q">查询影响面</button>
+    </div>
+    <div class="tips">基于血缘闭包预计算：输入上游表，返回所有引用它的 DataWind 数据集（改动前评估影响范围）。</div>
+  </div>
+  <div class="panel" id="result"><div class="empty">输入表名查询下游影响面</div></div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+function esc(s){ return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+async function j(url){ const r = await fetch(url); return r.json(); }
+$('q').onclick = async () => {
+  const db = encodeURIComponent($('db').value.trim());
+  const table = encodeURIComponent($('table').value.trim());
+  if (!table){ $('result').innerHTML = '<div class="empty">请输入表名</div>'; return; }
+  $('result').innerHTML = '<div class="empty">查询中...</div>';
+  const d = await j(`/api/tables/impact?db=${db}&table=${table}`);
+  if (d.error){ $('result').innerHTML = `<div class="empty">${esc(d.error)}</div>`; return; }
+  const rows = d.items.map(i => `<tr>
+    <td><a href="/dataset/${i.dataset_id}">${i.dataset_id}</a></td>
+    <td><a href="/dataset/${i.dataset_id}">${esc(i.name)}</a></td>
+    <td>${esc(i.folder_path)}</td><td>${i.ref_cnt}</td></tr>`).join('')
+    || '<tr><td colspan="4" class="empty">无数据集引用该表</td></tr>';
+  $('result').innerHTML = `
+    <h2>${esc(d.db ? d.db + '.' : '')}${esc(d.table)} → 下游 <span class="big">${d.total}</span> 个数据集</h2>
+    <div style="overflow-x:auto;"><table><thead><tr><th>数据集ID</th><th>名称</th><th>文件夹</th><th>引用次数</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
+};
+$('table').addEventListener('keydown', e => { if (e.key === 'Enter') $('q').click(); });
+</script>
+</body>
+</html>
