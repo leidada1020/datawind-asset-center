@@ -39,6 +39,7 @@ TBL_FOLDER = "{db}.dim_datawind_folder_s_d"
 TBL_TBL_LINEAGE = "{db}.dwd_datawind_table_lineage_t_d"
 TBL_COL_LINEAGE = "{db}.dwd_datawind_column_lineage_t_d"
 TBL_PARSE_STAT = "{db}.dwd_datawind_parse_stat_s_d"
+TBL_CLOSURE = "{db}.dwd_datawind_lineage_closure_t_d"
 DDL_FOLDER = ddl_mod.DDL_FOLDER
 
 
@@ -125,6 +126,31 @@ def write_lineage(doris, stat_date, etl_time, dataset_sql_map, parser):
     return stat
 
 
+def build_closure(doris, stat_date, etl_time):
+    """血缘闭包构建: 从当日 table_lineage 全量生成 hop=1 闭包行
+
+    算法: 闭包 = 表级血缘(数据集->直接上游表) 展开为 up_db/up_table
+    hop>1 需源表间依赖图(DataWind不提供, 预留; P3 ODS接入后可迭代扩展)
+    返回闭包行数
+    """
+    rows = doris.exec(
+        "SELECT dataset_id, db_table FROM %s WHERE dt = %%s" % TBL_TBL_LINEAGE.format(db=doris.db),
+        (stat_date,), fetch=True)
+    c_rows = []
+    for dsid, db_table in rows:
+        if "." in db_table:
+            db, tb = db_table.rsplit(".", 1)
+        else:
+            db, tb = None, db_table
+        c_rows.append((stat_date, dsid, db, tb, 1, db_table, etl_time))
+    if not c_rows:
+        return 0
+    doris.exec("DELETE FROM %s WHERE dt = %%s" % TBL_CLOSURE.format(db=doris.db), (stat_date,))
+    sql = "INSERT INTO %s (dt, dataset_id, up_db, up_table, hop_depth, lineage_path, etl_time) VALUES (%%s,%%s,%%s,%%s,%%s,%%s,%%s)" % TBL_CLOSURE.format(db=doris.db)
+    doris.execmany(sql, c_rows)
+    return len(c_rows)
+
+
 def lineage_diff(prev_dt, cur_dt, doris, dataset_names):
     """血缘 diff: 上游表变化 -> 变更列表
 
@@ -190,7 +216,8 @@ def main():
     doris.create_table(ddl_mod.DDL_TABLE_LINEAGE.format(db=doris.db))
     doris.create_table(ddl_mod.DDL_COLUMN_LINEAGE.format(db=doris.db))
     doris.create_table(ddl_mod.DDL_PARSE_STAT.format(db=doris.db))
-    print("==> 表已就绪: 快照/变更/文件夹/表血缘/字段血缘/解析统计")
+    doris.create_table(ddl_mod.DDL_CLOSURE.format(db=doris.db))
+    print("==> 表已就绪: 快照/变更/文件夹/表血缘/字段血缘/解析统计/闭包")
 
     # 文件夹树快照写入
     etl_time = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -281,6 +308,9 @@ def main():
                 if lc:
                     changes.extend(lc)
                     print("    血缘 diff: 上游表变化 %d 条" % len(lc))
+            # 闭包表构建(影响分析: 上游全部来源 / 按表反查下游影响面)
+            c_n = build_closure(doris, stat_date, etl_time)
+            print("    闭包表: %d 条 (dt=%s)" % (c_n, stat_date))
         except Exception as e:
             print("    [警告] 血缘解析失败, 已跳过(不影响快照): %s" % e)
 
@@ -305,6 +335,8 @@ def main():
         tcnt = doris.count(TBL_TBL_LINEAGE.format(db=doris.db), "dt=%s", (stat_date,))
         ccnt = doris.count(TBL_COL_LINEAGE.format(db=doris.db), "dt=%s", (stat_date,))
         print("==> 血缘校验: 表级边=%d 条, 字段级边=%d 条 (dt=%s)" % (tcnt, ccnt, stat_date))
+        clcnt = doris.count(TBL_CLOSURE.format(db=doris.db), "dt=%s", (stat_date,))
+        print("==> 闭包校验: 闭包边=%d 条 (dt=%s)" % (clcnt, stat_date))
 
     print("---- 本次变化汇总 ----")
     if not changes:

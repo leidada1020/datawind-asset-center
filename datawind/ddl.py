@@ -190,3 +190,28 @@ PROPERTIES (
     "replication_num" = "2"
 )
 """
+
+DDL_CLOSURE = """
+CREATE TABLE IF NOT EXISTS {db}.dwd_datawind_lineage_closure_t_d (
+    dt                  DATE         NOT NULL COMMENT '闭包快照日(分区键)=抓取日',
+    dataset_id          BIGINT       NOT NULL COMMENT '数据集ID(下游, 消费侧)',
+    up_db               VARCHAR(128) COMMENT '上游表所属库名(db; 无库名时留空)',
+    up_table            VARCHAR(256) NOT NULL COMMENT '上游表名(不含库, 与up_db合成db.table)',
+    hop_depth           TINYINT      COMMENT '血缘跳数: 1=直接上游(加工SQL引用); >1=经中间数据集/表传递(预留, 当前源表依赖图未接入恒为1)',
+    lineage_path        VARCHAR(2000) COMMENT '血缘路径(预留): 1跳为直接上游表; 多跳形如 表A->表B->数据集(源表间依赖图接入后填充)',
+    etl_time            DATETIME     NOT NULL COMMENT '数据处理时间'
+) ENGINE=OLAP
+UNIQUE KEY(dt, dataset_id, up_db, up_table)
+COMMENT 'DataWind血缘闭包(t_d): 数据集->上游表全路径预计算(当前1跳=table_lineage全量; 源表依赖图接入后可迭代多跳); 支撑上游全部来源查询与按up_table反查下游影响面, 避免运行时递归'
+PARTITION BY RANGE(dt) ()
+DISTRIBUTED BY HASH(dataset_id) BUCKETS 8
+PROPERTIES (
+    "dynamic_partition.enable" = "true",
+    "dynamic_partition.time_unit" = "DAY",
+    "dynamic_partition.start" = "-180",
+    "dynamic_partition.end" = "3",
+    "dynamic_partition.prefix" = "p",
+    "dynamic_partition.replication_num" = "2",
+    "replication_num" = "2"
+)
+"""
