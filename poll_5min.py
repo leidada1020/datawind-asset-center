@@ -137,10 +137,13 @@ def save_baseline(baseline):
 
 
 def build_current(ds_list):
-    """列表 -> {id: {name, mtime, status}}（仅保留 diff 所需字段）"""
+    """列表 -> {id(str): {name, mtime, status}}（仅保留 diff 所需字段）
+
+    key 统一为 str: 基线从 JSON 加载后 key 是字符串, 避免 int/str 不一致导致全量误报
+    """
     cur = {}
     for ds in ds_list:
-        cur[ds.get("id")] = {
+        cur[str(ds.get("id"))] = {
             "name": ds.get("name"),
             "mtime": str(ds.get("mtime")) if ds.get("mtime") else "",
             "status": ds.get("status"),
