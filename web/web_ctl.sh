@@ -5,7 +5,7 @@ APP=/opt/datawind-asset-center
 VENV=/opt/datawind-venv
 LOG=$APP/logs/web.log
 PID=$APP/web.pid
-PORT=18080
+PORT=18081
 
 start() {
   cd $APP || exit 1
