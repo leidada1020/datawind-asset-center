@@ -13,7 +13,7 @@ start() {
     echo "web 已在运行 (PID $(cat $PID))"
     return 0
   fi
-  nohup $VENV/bin/python -m uvicorn web.app:app --host 0.0.0.0 --port $PORT >> $LOG 2>&1 &
+  setsid nohup $VENV/bin/python -m uvicorn web.app:app --host 0.0.0.0 --port $PORT >> $LOG 2>&1 < /dev/null &
   echo $! > $PID
   sleep 2
   if kill -0 $(cat $PID) 2>/dev/null; then

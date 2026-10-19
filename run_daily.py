@@ -217,7 +217,9 @@ def main():
     doris.create_table(ddl_mod.DDL_COLUMN_LINEAGE.format(db=doris.db))
     doris.create_table(ddl_mod.DDL_PARSE_STAT.format(db=doris.db))
     doris.create_table(ddl_mod.DDL_CLOSURE.format(db=doris.db))
-    print("==> 表已就绪: 快照/变更/文件夹/表血缘/字段血缘/解析统计/闭包")
+    doris.create_table(ddl_mod.DDL_DORIS_TABLE.format(db=doris.db))
+    doris.create_table(ddl_mod.DDL_DORIS_COLUMN.format(db=doris.db))
+    print("==> 表已就绪: 快照/变更/文件夹/表血缘/字段血缘/解析统计/闭包/Doris表资产/Doris字段资产")
 
     # 文件夹树快照写入
     etl_time = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -333,6 +335,17 @@ def main():
               % (len(changes), max_id + 1))
     else:
         print("==> 与 %s 相比无变化(或首次基线, 无对比)" % (prev_date or "无"))
+
+    # Doris 表资产采集（每日全量, 独立 try 不影响 DataWind 主流程）
+    try:
+        from datawind.doris_assets import collect_tables, collect_columns, write_doris_assets
+        print("==> 采集 Doris 表资产(information_schema) ...")
+        t_rows = collect_tables(doris, stat_date, etl_time)
+        c_rows = collect_columns(doris, stat_date, etl_time)
+        n_t, n_c = write_doris_assets(doris, stat_date, etl_time, t_rows, c_rows)
+        print("    Doris 资产快照: 表=%d 字段=%d (dt=%s, 库数=15)" % (n_t, n_c, stat_date))
+    except Exception as e:
+        print("    [警告] Doris 资产采集失败(不影响 DataWind 主流程): %s" % e)
 
     # 校验
     cnt = doris.count(TBL_SNAPSHOT.format(db=doris.db), "dt=%s", (stat_date,))

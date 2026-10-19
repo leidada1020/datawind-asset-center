@@ -63,17 +63,31 @@ a.ds:hover{text-decoration:underline;}
   <div class="cards" id="cards"></div>
 
   <div class="panel">
-    <h2>资产目录</h2>
-    <div class="filters">
+    <h2>资产目录
+      <span style="margin-left:16px;font-size:13px;color:var(--sub);">
+        <label style="cursor:pointer;"><input type="radio" name="view" value="dataset" checked onchange="switchView('dataset')"> DataWind 数据集</label>
+        &nbsp;&nbsp;
+        <label style="cursor:pointer;"><input type="radio" name="view" value="doris" onchange="switchView('doris')"> Doris 表资产</label>
+      </span>
+    </h2>
+    <div class="filters" id="filtersDs">
       <input id="kw" placeholder="搜索名称/ID">
       <input id="folder" placeholder="文件夹路径(如 /ZamLoan/风控)">
       <select id="type"></select>
       <button id="searchBtn" style="border:1px solid var(--line);background:#fff;border-radius:6px;padding:7px 16px;cursor:pointer;">查询</button>
       <span style="margin-left:auto;font-size:13px;color:var(--sub);" id="totalLabel"></span>
     </div>
+    <div class="filters" id="filtersDoris" style="display:none;">
+      <input id="kwD" placeholder="搜索表名/表注释">
+      <select id="dbSel"><option value="">全部库</option></select>
+      <select id="layerSel"><option value="">全部分层</option></select>
+      <button id="searchBtnD" style="border:1px solid var(--line);background:#fff;border-radius:6px;padding:7px 16px;cursor:pointer;">查询</button>
+      <span style="margin-left:auto;font-size:13px;color:var(--sub);" id="totalLabelD"></span>
+    </div>
     <div style="overflow-x:auto;">
       <table>
-        <thead><tr><th>ID</th><th>名称</th><th>文件夹</th><th>类型</th><th>调度</th><th>状态</th><th>行数</th><th>上次同步</th><th>来源表</th></tr></thead>
+        <thead id="thDs"><tr><th>ID</th><th>名称</th><th>文件夹</th><th>类型</th><th>调度</th><th>状态</th><th>行数</th><th>上次同步</th><th>来源表</th></tr></thead>
+        <thead id="thDoris" style="display:none;"><tr><th>库.表</th><th>类型</th><th>引擎</th><th>行数</th><th>数据量</th><th>建表时间</th><th>最近更新</th><th>分层</th><th>注释</th></tr></thead>
         <tbody id="tb"></tbody>
       </table>
     </div>
@@ -89,19 +103,22 @@ a.ds:hover{text-decoration:underline;}
 </main>
 
 <script>
-let page = 1, total = 0;
+let page = 1, total = 0, view = 'dataset';
 const $ = id => document.getElementById(id);
 
 async function j(url){ const r = await fetch(url); return r.json(); }
+
+function esc(s){ return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function trim(s, n){ return s.length > n ? s.slice(0, n) + '…' : s; }
+function fmtSize(n){ if (n == null) return '-'; const u=['B','KB','MB','GB','TB']; let i=0; while (n>=1024 && i<u.length-1){ n/=1024; i++; } return n.toFixed(1)+' '+u[i]; }
 
 async function loadStats(){
   const s = await j('/api/stats');
   if (s.error){ $('dtLabel').textContent = s.error; return; }
   $('dtLabel').textContent = '快照日: ' + s.dt;
   const cards = [
-    ['数据集', s.datasets], ['文件夹', s.folders], ['表血缘边', s.table_edges],
-    ['字段血缘边', s.column_edges], ['今日变更', s.changes_today],
-    ['解析率', s.parsed ? (s.fail === 0 ? '100%' : ((1 - s.fail/s.parsed)*100).toFixed(1)+'%') : '-']
+    ['数据集', s.datasets], ['Doris表', s.doris_tables], ['Doris字段', s.doris_columns],
+    ['表血缘边', s.table_edges], ['字段血缘边', s.column_edges], ['今日变更', s.changes_today]
   ];
   $('cards').innerHTML = cards.map(c =>
     `<div class="card"><div class="num">${c[1]}</div><div class="lbl">${c[0]}</div></div>`).join('');
@@ -113,31 +130,61 @@ async function loadTypes(){
     `<option value="${t.code}">${t.name} (${t.cnt})</option>`).join('');
 }
 
-async function loadList(){
-  const kw = encodeURIComponent($('kw').value);
-  const folder = encodeURIComponent($('folder').value);
-  const type = $('type').value;
-  const d = await j(`/api/datasets?keyword=${kw}&folder=${folder}&type_code=${type}&page=${page}&size=20`);
-  if (d.error){ $('tb').innerHTML = `<tr><td colspan="8" class="empty">${d.error}</td></tr>`; return; }
-  total = d.total; $('totalLabel').textContent = `共 ${total} 个数据集`;
-  $('pageLabel').textContent = `第 ${d.page} / ${Math.max(1, Math.ceil(total/d.size))} 页`;
-  $('prevBtn').disabled = page <= 1;
-  $('nextBtn').disabled = page * d.size >= total;
-  $('tb').innerHTML = d.items.map(i => `<tr>
-    <td><a class="ds" href="/dataset/${i.dataset_id}">${i.dataset_id}</a></td>
-    <td><a class="ds" href="/dataset/${i.dataset_id}">${esc(i.name)}</a></td>
-    <td>${esc(i.folder_path)}</td>
-    <td>${esc(i.type_name)}</td>
-    <td>${esc(i.frequency)}${i.schedule_time?' <span class="badge">'+esc(i.schedule_time)+'</span>':''}</td>
-    <td>${i.status === 1 ? '正常' : i.status === 2 ? '删除' : i.status === 3 ? '回收站' : esc(String(i.status))}</td>
-    <td>${i.rows_cnt ?? '-'}</td>
-    <td>${esc(i.last_sync)}</td>
-    <td title="${esc(i.source_tables)}">${esc(trim(i.source_tables, 40))}</td>
-  </tr>`).join('');
+async function loadLayers(){
+  const ls = await j('/api/doris/layers');
+  const dbSet = new Set(), layerSet = new Set();
+  for (const l of ls){ dbSet.add(l.db); layerSet.add(l.layer); }
+  $('dbSel').innerHTML = '<option value="">全部库</option>' + [...dbSet].sort().map(d =>
+    `<option value="${d}">${d}</option>`).join('');
+  $('layerSel').innerHTML = '<option value="">全部分层</option>' + [...layerSet].sort().map(l =>
+    `<option value="${l}">${l}</option>`).join('');
 }
 
-function esc(s){ return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
-function trim(s, n){ return s.length > n ? s.slice(0, n) + '…' : s; }
+async function loadList(){
+  if (view === 'dataset'){
+    const kw = encodeURIComponent($('kw').value);
+    const folder = encodeURIComponent($('folder').value);
+    const type = $('type').value;
+    const d = await j(`/api/datasets?keyword=${kw}&folder=${folder}&type_code=${type}&page=${page}&size=20`);
+    if (d.error){ $('tb').innerHTML = `<tr><td colspan="8" class="empty">${d.error}</td></tr>`; return; }
+    total = d.total; $('totalLabel').textContent = `共 ${total} 个数据集`;
+    $('pageLabel').textContent = `第 ${d.page} / ${Math.max(1, Math.ceil(total/d.size))} 页`;
+    $('prevBtn').disabled = page <= 1;
+    $('nextBtn').disabled = page * d.size >= total;
+    $('tb').innerHTML = d.items.map(i => `<tr>
+      <td><a class="ds" href="/dataset/${i.dataset_id}">${i.dataset_id}</a></td>
+      <td><a class="ds" href="/dataset/${i.dataset_id}">${esc(i.name)}</a></td>
+      <td>${esc(i.folder_path)}</td>
+      <td>${esc(i.type_name)}</td>
+      <td>${esc(i.frequency)}${i.schedule_time?' <span class="badge">'+esc(i.schedule_time)+'</span>':''}</td>
+      <td>${i.status === 1 ? '正常' : i.status === 2 ? '删除' : i.status === 3 ? '回收站' : esc(String(i.status))}</td>
+      <td>${i.rows_cnt ?? '-'}</td>
+      <td>${esc(i.last_sync)}</td>
+      <td title="${esc(i.source_tables)}">${esc(trim(i.source_tables, 40))}</td>
+    </tr>`).join('');
+  } else {
+    const kw = encodeURIComponent($('kwD').value);
+    const db = encodeURIComponent($('dbSel').value);
+    const layer = encodeURIComponent($('layerSel').value);
+    const d = await j(`/api/doris/tables?keyword=${kw}&db=${db}&layer=${layer}&page=${page}&size=20`);
+    if (d.error){ $('tb').innerHTML = `<tr><td colspan="8" class="empty">${d.error}</td></tr>`; return; }
+    total = d.total; $('totalLabelD').textContent = `共 ${total} 张表`;
+    $('pageLabel').textContent = `第 ${d.page} / ${Math.max(1, Math.ceil(total/d.size))} 页`;
+    $('prevBtn').disabled = page <= 1;
+    $('nextBtn').disabled = page * d.size >= total;
+    $('tb').innerHTML = d.items.map(i => `<tr>
+      <td><a class="ds" href="/lineage?node=${encodeURIComponent(i.db + '.' + i.table)}">${esc(i.db)}.${esc(i.table)}</a></td>
+      <td>${i.type === 'BASE TABLE' ? '物理表' : '视图'}</td>
+      <td>${esc(i.engine)}</td>
+      <td>${i.rows ?? '-'}</td>
+      <td>${fmtSize(i.size)}</td>
+      <td>${esc(i.ctime)}</td>
+      <td>${esc(i.utime)}</td>
+      <td><span class="badge">${esc(i.layer)}</span></td>
+      <td title="${esc(i.comment)}">${esc(trim(i.comment, 40))}</td>
+    </tr>`).join('');
+  }
+}
 
 async function loadChanges(){
   const d = await j('/api/changes?size=10');
@@ -151,12 +198,23 @@ async function loadChanges(){
   </li>`).join('');
 }
 
+function switchView(v){
+  view = v; page = 1;
+  $('filtersDs').style.display = v === 'dataset' ? '' : 'none';
+  $('filtersDoris').style.display = v === 'doris' ? '' : 'none';
+  $('thDs').style.display = v === 'dataset' ? '' : 'none';
+  $('thDoris').style.display = v === 'doris' ? '' : 'none';
+  loadList();
+}
+
 $('searchBtn').onclick = () => { page = 1; loadList(); };
+$('searchBtnD').onclick = () => { page = 1; loadList(); };
 $('kw').addEventListener('keydown', e => { if (e.key === 'Enter'){ page = 1; loadList(); }});
+$('kwD').addEventListener('keydown', e => { if (e.key === 'Enter'){ page = 1; loadList(); }});
 $('prevBtn').onclick = () => { if (page > 1){ page--; loadList(); } };
 $('nextBtn').onclick = () => { if (page * 20 < total){ page++; loadList(); } };
 
-loadStats(); loadTypes(); loadList(); loadChanges();
+loadStats(); loadTypes(); loadLayers(); loadList(); loadChanges();
 </script>
 </body>
 </html>

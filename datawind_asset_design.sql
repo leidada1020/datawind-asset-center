@@ -1,5 +1,5 @@
 -- =====================================================================
--- DataWind 数据集资产监控 · 系统级落库设计 v2.1（作业运维项目）
+-- DataWind 数据集资产监控 · 系统级落库设计 v2.2（作业运维项目）
 -- 目标库: Doris etl (203.123.86.71:9030)  MySQL 协议
 -- 需求: ① dt 日期分区 + etl_time 处理时间  ② 字段/表描述详细+枚举值含义  ③ 快照自比对识别变更
 -- 命名规范: 表名=层前缀_业务域_对象_必要粒度_存储后缀 (对齐《公司建模开发指南》)
@@ -268,3 +268,62 @@ PROPERTIES (
 -- 某表下游影响面(哪些数据集引用): SELECT dataset_id, COUNT(*) FROM etl.dwd_datawind_lineage_closure_t_d
 --                      WHERE dt=CURDATE() AND up_db='mv' AND up_table='ods_zamloan_orderinfo_i_d'
 --                      GROUP BY dataset_id ORDER BY COUNT(*) DESC;
+
+-- ---------------------------------------------------------------------
+-- 表8: etl.ods_doris_table_s_d  Doris 物理表资产每日快照（_s_d, 分区表）
+-- 每日从 information_schema.tables 采集全业务库(排除 system 库), 与 DataWind 数据集快照互补
+-- 覆盖库: mv/ods/dwd/dim/dws/ads/tmp/fin 等, 分层标签 layer 由库名前缀识别
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS etl.ods_doris_table_s_d (
+    dt                  DATE         NOT NULL COMMENT '资产快照日(分区键)=抓取日',
+    db_name             VARCHAR(128) NOT NULL COMMENT '库名(Doris database; 如 mv/ods/dwd/dim/dws/ads/tmp/fin 等业务库)',
+    table_name          VARCHAR(256) NOT NULL COMMENT '表名(不含库, 与db_name合成db.table唯一标识)',
+    table_type          VARCHAR(16)  COMMENT '表类型枚举: BASE TABLE=物理表 VIEW=视图',
+    engine              VARCHAR(32)  COMMENT '存储引擎(如 Doris)',
+    rows_cnt            BIGINT       COMMENT '表行数估计值(TABLE_ROWS, 非精确)',
+    data_size           BIGINT       COMMENT '表数据量字节(DATA_LENGTH)',
+    avg_row_len         BIGINT       COMMENT '平均行字节数(估计值)',
+    create_time         DATETIME     COMMENT '建表时间(元数据)',
+    update_time         DATETIME     COMMENT '最近更新时间(元数据, 部分表可能为空/不准, 仅参考)',
+    table_comment       VARCHAR(1024) COMMENT '表注释(建表COMMENT)',
+    layer               VARCHAR(16)  COMMENT '数仓分层标签: mv/ods/dwd/dim/dws/ads/tmp/fin=按库名前缀识别; other=app/bak/etl/shield/stg/test等未归层库',
+    etl_time            DATETIME     NOT NULL COMMENT '数据处理时间,本次ETL写入时刻(Asia/Shanghai)'
+) ENGINE=OLAP
+UNIQUE KEY(dt, db_name, table_name)
+COMMENT 'Doris物理表资产每日快照(s_d): information_schema.tables采集, 支持按库/分层/类型筛选, 与血缘表关联'
+PARTITION BY RANGE(dt) ()
+DISTRIBUTED BY HASH(db_name, table_name) BUCKETS 8
+PROPERTIES (
+    "dynamic_partition.enable" = "true", "dynamic_partition.time_unit" = "DAY",
+    "dynamic_partition.start" = "-30", "dynamic_partition.end" = "3",
+    "dynamic_partition.prefix" = "p", "dynamic_partition.replication_num" = "2",
+    "replication_num" = "2"
+);
+
+-- ---------------------------------------------------------------------
+-- 表9: etl.ods_doris_column_s_d  Doris 字段资产每日快照（_s_d, 分区表）
+-- 每日从 information_schema.columns 采集全业务库字段级元数据, 支撑字段搜索/详情/字段级资产盘点
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS etl.ods_doris_column_s_d (
+    dt                  DATE         NOT NULL COMMENT '资产快照日(分区键)=抓取日',
+    db_name             VARCHAR(128) NOT NULL COMMENT '库名(与ods_doris_table_s_d.db_name一致)',
+    table_name          VARCHAR(256) NOT NULL COMMENT '表名',
+    column_name         VARCHAR(256) NOT NULL COMMENT '字段名',
+    ordinal_position    INT          COMMENT '字段序号(表内自1递增, 建表顺序)',
+    column_type         VARCHAR(128) COMMENT '字段类型(完整定义, 如 BIGINT/VARCHAR(256)/DECIMAL(20,2))',
+    data_type           VARCHAR(64)  COMMENT '字段基础类型(不带长度精度, 如 BIGINT/VARCHAR/DECIMAL)',
+    is_nullable         VARCHAR(8)   COMMENT '是否可空: YES=允许NULL NO=NOT NULL',
+    column_default      VARCHAR(256) COMMENT '字段默认值(无默认值时可能为NULL)',
+    column_comment      VARCHAR(1024) COMMENT '字段注释(建表COMMENT, 可为空)',
+    etl_time            DATETIME     NOT NULL COMMENT '数据处理时间'
+) ENGINE=OLAP
+UNIQUE KEY(dt, db_name, table_name, column_name)
+COMMENT 'Doris字段资产每日快照(s_d): information_schema.columns采集, 与血缘字段边关联'
+PARTITION BY RANGE(dt) ()
+DISTRIBUTED BY HASH(db_name, table_name) BUCKETS 8
+PROPERTIES (
+    "dynamic_partition.enable" = "true", "dynamic_partition.time_unit" = "DAY",
+    "dynamic_partition.start" = "-30", "dynamic_partition.end" = "3",
+    "dynamic_partition.prefix" = "p", "dynamic_partition.replication_num" = "2",
+    "replication_num" = "2"
+);

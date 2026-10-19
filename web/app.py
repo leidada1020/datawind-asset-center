@@ -60,6 +60,8 @@ def api_stats():
             ("table_edges", "etl.dwd_datawind_table_lineage_t_d"),
             ("column_edges", "etl.dwd_datawind_column_lineage_t_d"),
             ("closure_edges", "etl.dwd_datawind_lineage_closure_t_d"),
+            ("doris_tables", "etl.ods_doris_table_s_d"),
+            ("doris_columns", "etl.ods_doris_column_s_d"),
         ]:
             r = d.exec("SELECT COUNT(*) FROM %s WHERE dt=%%s" % tbl, (dt,), fetch=True)
             out[k] = r[0][0] if r else 0
@@ -195,6 +197,168 @@ def api_table_impact(db: str = "", table: str = Query(..., min_length=1)):
             out.append({"dataset_id": r[0], "ref_cnt": r[1],
                         "name": nm[0][0] if nm else "", "folder_path": nm[0][1] if nm else ""})
         return {"table": table, "db": db, "total": len(out), "items": out}
+    finally:
+        d.close()
+
+
+# ---------------- 血缘图谱（上下游双向, P3） ----------------
+# 边模型: 数据集(加工SQL) 引用/消费 上游表 -> 数据流向 表→数据集
+#   down: 沿数据流向(表→数据集, 数据集暂无下游消费方)
+#   up:   反向(数据集→上游表; 物理表无上游生产逻辑, 为空)
+#   both: 双向BFS, 形成"相关表+数据集"血缘网络
+@app.get("/api/lineage/graph")
+def api_lineage_graph(node: str = Query(..., min_length=1),
+                      direction: str = Query("both", pattern="^(up|down|both)$"),
+                      depth: int = Query(2, ge=1, le=4),
+                      max_nodes: int = Query(300, ge=20, le=800)):
+    d = get_doris()
+    try:
+        dt = latest_dt(d)
+        if not dt:
+            return JSONResponse({"error": "无快照数据"}, status_code=404)
+        dt_s = str(dt)
+
+        # 1. 边集: 数据集 -> 上游表
+        rows = d.exec("SELECT dataset_id, db_table FROM etl.dwd_datawind_table_lineage_t_d WHERE dt=%s", (dt_s,), fetch=True)
+        up_map, down_map = {}, {}          # up: dsid->[table], down: table->[dsid]
+        for dsid, db_table in rows:
+            up_map.setdefault(dsid, set()).add(db_table)
+            down_map.setdefault(db_table, set()).add(dsid)
+
+        # 2. 定位起始节点
+        start = None
+        if node.isdigit():
+            dsid = int(node)
+            if dsid in up_map:
+                start = ("d", dsid)
+        if start is None:
+            # 表: 精确 db.table 或 仅表名(匹配首条)
+            if "." in node:
+                cand = [t for t in down_map if t == node]
+            else:
+                cand = [t for t in down_map if t.endswith("." + node) or t == node]
+            if cand:
+                start = ("t", cand[0])
+        if start is None:
+            return JSONResponse({"error": "未找到该表/数据集的血缘记录(可尝试数据集ID或 db.table 全名)"}, status_code=404)
+
+        # 3. 双向 BFS 收集节点与边
+        nodes = {}   # id -> node dict
+        edges = []   # {"from","to","type"}
+        seen_e = set()
+
+        def add_table(t):
+            if t not in nodes:
+                db, tb = t.rsplit(".", 1) if "." in t else ("", t)
+                nodes[t] = {"id": "t:" + t, "kind": "table", "db": db, "table": tb,
+                            "name": t, "layer": db}
+            return "t:" + t
+
+        def add_ds(dsid):
+            nid = "d:%d" % dsid
+            if nid not in nodes:
+                nm = d.exec("SELECT name, folder_path FROM etl.ods_datawind_dataset_s_d WHERE dt=%s AND dataset_id=%s", (dt_s, dsid), fetch=True)
+                nodes[nid] = {"id": nid, "kind": "dataset", "dataset_id": dsid,
+                              "name": nm[0][0] if nm else ("数据集%d" % dsid),
+                              "folder_path": nm[0][1] if nm else "", "db": "", "table": ""}
+            return nid
+
+        def add_edge(frm, to, etype):
+            k = (frm, to)
+            if k not in seen_e:
+                seen_e.add(k)
+                edges.append({"from": frm, "to": to, "type": etype})
+
+        from collections import deque
+        q = deque([(start, 0)])
+        visited = {start}
+        while q:
+            (kind, key), hop = q.popleft()
+            if hop >= depth:
+                continue
+            if kind == "t":
+                src_id = "t:" + key
+                # 表的下游 = 引用该表的数据集 (数据流向 表→数据集); 表的上游无生产逻辑, 不展开
+                if direction in ("down", "both"):
+                    for dsid in down_map.get(key, ()):
+                        dst_id = add_ds(dsid)
+                        add_edge(src_id, dst_id, "consume")
+                        st = ("d", dsid)
+                        if st not in visited:
+                            visited.add(st); q.append((st, hop + 1))
+            else:
+                src_id = "d:%d" % key
+                # 数据集的上游 = 它引用的上游表 (数据流向 表→数据集); 数据集暂无下游消费方
+                if direction in ("up", "both"):
+                    for t in up_map.get(key, ()):
+                        dst_id = add_table(t)
+                        add_edge(dst_id, src_id, "consume")
+                        st = ("t", t)
+                        if st not in visited:
+                            visited.add(st); q.append((st, hop + 1))
+            if len(nodes) >= max_nodes:
+                break
+
+        # 4. 数据集节点补充 layer 占位(表节点layer已含)
+        return {"start": start, "direction": direction, "depth": depth, "dt": dt_s,
+                "nodes": list(nodes.values()), "edges": edges,
+                "stats": {"tables": sum(1 for n in nodes.values() if n["kind"] == "table"),
+                          "datasets": sum(1 for n in nodes.values() if n["kind"] == "dataset"),
+                          "edges": len(edges)}}
+    finally:
+        d.close()
+
+
+# ---------------- Doris 表资产（资产扩展） ----------------
+@app.get("/api/doris/tables")
+def api_doris_tables(keyword: str = "", db: str = "", layer: str = "",
+                     type_code: str = "", page: int = Query(1, ge=1),
+                     size: int = Query(20, ge=1, le=100)):
+    d = get_doris()
+    try:
+        dt = latest_dt(d)
+        if not dt:
+            return JSONResponse({"error": "无快照数据"}, status_code=404)
+        dt_s = str(dt)
+        where = ["dt = %s"]
+        args = [dt_s]
+        if keyword:
+            where.append("(table_name LIKE %s OR table_comment LIKE %s)")
+            args += ["%%%s%%" % keyword, "%%%s%%" % keyword]
+        if db:
+            where.append("db_name = %s")
+            args.append(db)
+        if layer:
+            where.append("layer = %s")
+            args.append(layer)
+        if type_code:
+            where.append("table_type = %s")
+            args.append(type_code)
+        w = " AND ".join(where)
+        cnt = d.exec("SELECT COUNT(*) FROM etl.ods_doris_table_s_d WHERE %s" % w, args, fetch=True)[0][0]
+        off = (page - 1) * size
+        rows = d.exec(
+            "SELECT db_name, table_name, table_type, engine, rows_cnt, data_size, "
+            "create_time, update_time, table_comment, layer "
+            "FROM etl.ods_doris_table_s_d WHERE %s ORDER BY db_name, table_name LIMIT %s OFFSET %s"
+            % (w, size, off), args, fetch=True)
+        items = [{"db": r[0], "table": r[1], "type": r[2], "engine": r[3], "rows": r[4],
+                  "size": r[5], "ctime": str(r[6]) if r[6] else "", "utime": str(r[7]) if r[7] else "",
+                  "comment": (r[8] or "")[:200], "layer": r[9]} for r in rows]
+        return {"total": cnt, "page": page, "size": size, "items": items}
+    finally:
+        d.close()
+
+
+@app.get("/api/doris/layers")
+def api_doris_layers():
+    d = get_doris()
+    try:
+        dt = latest_dt(d)
+        if not dt:
+            return JSONResponse({"error": "无快照数据"}, status_code=404)
+        rows = d.exec("SELECT layer, db_name, COUNT(*) FROM etl.ods_doris_table_s_d WHERE dt=%s GROUP BY layer, db_name ORDER BY layer, db_name", (str(dt),), fetch=True)
+        return [{"layer": r[0], "db": r[1], "cnt": r[2]} for r in rows]
     finally:
         d.close()
 

@@ -215,3 +215,63 @@ PROPERTIES (
     "replication_num" = "2"
 )
 """
+
+DDL_DORIS_TABLE = """
+CREATE TABLE IF NOT EXISTS {db}.ods_doris_table_s_d (
+    dt                  DATE         NOT NULL COMMENT '资产快照日(分区键)=抓取日',
+    db_name             VARCHAR(128) NOT NULL COMMENT '库名(Doris database; 如 mv/ods/dwd/dim/dws/ads/tmp/fin 等业务库)',
+    table_name          VARCHAR(256) NOT NULL COMMENT '表名(不含库, 与db_name合成db.table唯一标识)',
+    table_type          VARCHAR(16)  COMMENT '表类型枚举: BASE TABLE=物理表 VIEW=视图',
+    engine              VARCHAR(32)  COMMENT '存储引擎(如 Doris)',
+    rows_cnt            BIGINT       COMMENT '表行数估计值(information_schema.tables.TABLE_ROWS, 非精确)',
+    data_size           BIGINT       COMMENT '表数据量字节(information_schema.tables.DATA_LENGTH)',
+    avg_row_len         BIGINT       COMMENT '平均行字节数(估计值)',
+    create_time         DATETIME     COMMENT '建表时间(元数据)',
+    update_time         DATETIME     COMMENT '最近更新时间(元数据, 部分表可能为空/不准, 仅参考)',
+    table_comment       VARCHAR(1024) COMMENT '表注释(建表COMMENT)',
+    layer               VARCHAR(16)  COMMENT '数仓分层标签: mv/ods/dwd/dim/dws/ads/tmp/fin=按库名前缀识别; other=app/bak/etl/shield/stg/test等未归层库',
+    etl_time            DATETIME     NOT NULL COMMENT '数据处理时间,本次ETL写入时刻(Asia/Shanghai)'
+) ENGINE=OLAP
+UNIQUE KEY(dt, db_name, table_name)
+COMMENT 'Doris物理表资产每日快照(s_d): 每日从information_schema.tables采集全业务库, dt分区+etl_time; 用于资产目录展示Doris侧表资产, 与DataWind数据集快照互补; 支持按库/分层/类型筛选'
+PARTITION BY RANGE(dt) ()
+DISTRIBUTED BY HASH(db_name, table_name) BUCKETS 8
+PROPERTIES (
+    "dynamic_partition.enable" = "true",
+    "dynamic_partition.time_unit" = "DAY",
+    "dynamic_partition.start" = "-30",
+    "dynamic_partition.end" = "3",
+    "dynamic_partition.prefix" = "p",
+    "dynamic_partition.replication_num" = "2",
+    "replication_num" = "2"
+)
+"""
+
+DDL_DORIS_COLUMN = """
+CREATE TABLE IF NOT EXISTS {db}.ods_doris_column_s_d (
+    dt                  DATE         NOT NULL COMMENT '资产快照日(分区键)=抓取日',
+    db_name             VARCHAR(128) NOT NULL COMMENT '库名(与ods_doris_table_s_d.db_name一致)',
+    table_name          VARCHAR(256) NOT NULL COMMENT '表名',
+    column_name         VARCHAR(256) NOT NULL COMMENT '字段名',
+    ordinal_position    INT          COMMENT '字段序号(表内自1递增, 建表顺序)',
+    column_type         VARCHAR(128) COMMENT '字段类型(完整定义, 如 BIGINT/VARCHAR(256)/DECIMAL(20,2))',
+    data_type           VARCHAR(64)  COMMENT '字段基础类型(不带长度精度, 如 BIGINT/VARCHAR/DECIMAL)',
+    is_nullable         VARCHAR(8)   COMMENT '是否可空: YES=允许NULL NO=NOT NULL',
+    column_default      VARCHAR(256) COMMENT '字段默认值(无默认值时可能为NULL)',
+    column_comment      VARCHAR(1024) COMMENT '字段注释(建表COMMENT, 可为空)',
+    etl_time            DATETIME     NOT NULL COMMENT '数据处理时间'
+) ENGINE=OLAP
+UNIQUE KEY(dt, db_name, table_name, column_name)
+COMMENT 'Doris字段资产每日快照(s_d): 每日从information_schema.columns采集全业务库字段级元数据, dt分区+etl_time; 支撑字段搜索/详情/字段级资产盘点, 与血缘字段边关联'
+PARTITION BY RANGE(dt) ()
+DISTRIBUTED BY HASH(db_name, table_name) BUCKETS 8
+PROPERTIES (
+    "dynamic_partition.enable" = "true",
+    "dynamic_partition.time_unit" = "DAY",
+    "dynamic_partition.start" = "-30",
+    "dynamic_partition.end" = "3",
+    "dynamic_partition.prefix" = "p",
+    "dynamic_partition.replication_num" = "2",
+    "replication_num" = "2"
+)
+"""
