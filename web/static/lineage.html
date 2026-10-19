@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>血缘图谱 - DataWind 资产中心</title>
+<title>血缘查询 - DataWind 资产中心</title>
 <style>
 :root{--main:#1a6d8a;--bg:#f5f7fa;--card:#fff;--line:#e2e8f0;--text:#1f2329;--sub:#646a73;
   --c-mv:#2b6cb0;--c-ods:#2f855a;--c-dwd:#805ad5;--c-dim:#319795;--c-dws:#c05621;--c-ads:#c53030;
@@ -13,20 +13,21 @@ body{font-family:"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg)
 header{background:#fff;border-bottom:1px solid var(--line);padding:12px 24px;display:flex;align-items:center;gap:24px;}
 header h1{font-size:18px;color:var(--main);}
 header nav a{color:var(--sub);text-decoration:none;margin-right:16px;font-size:14px;}
-header nav a:hover{color:var(--main);}
+header nav a.active,header nav a:hover{color:var(--main);border-bottom:2px solid var(--main);}
 main{padding:16px 24px;max-width:1440px;margin:0 auto;}
 .panel{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px 18px;margin-bottom:14px;}
 .controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
 .controls label{font-size:13px;color:var(--sub);}
 .controls input,.controls select{border:1px solid var(--line);border-radius:6px;padding:7px 10px;font-size:13px;}
-.controls input#node{width:300px;}
+.controls input#node{width:320px;}
 .controls button{border:none;border-radius:6px;padding:7px 18px;cursor:pointer;background:var(--main);color:#fff;font-size:13px;}
 .controls button.ghost{background:#fff;border:1px solid var(--line);color:var(--sub);}
-#graph-wrap{position:relative;height:640px;border:1px solid var(--line);border-radius:8px;background:
-  radial-gradient(#f0f4f7 1px,transparent 1px);background-size:22px 22px;overflow:hidden;}
-#graph{width:100%;height:100%;display:block;}
+#graph-wrap{position:relative;height:680px;border:1px solid var(--line);border-radius:8px;background:
+  radial-gradient(#eef2f6 1px,transparent 1px);background-size:22px 22px;overflow:hidden;}
+#graph{position:absolute;top:0;left:0;cursor:grab;}
+#graph.panning{cursor:grabbing;}
 #detail{position:absolute;top:12px;right:12px;width:300px;max-height:560px;overflow:auto;background:#fff;
-  border:1px solid var(--line);border-radius:8px;padding:12px 14px;box-shadow:0 4px 14px rgba(0,0,0,.08);display:none;}
+  border:1px solid var(--line);border-radius:8px;padding:12px 14px;box-shadow:0 4px 14px rgba(0,0,0,.08);display:none;z-index:5;}
 #detail h3{font-size:14px;margin-bottom:8px;color:var(--main);word-break:break-all;}
 #detail .tag{display:inline-block;font-size:11px;padding:2px 8px;border-radius:4px;color:#fff;margin-bottom:6px;}
 #detail ul{list-style:none;margin-top:6px;}
@@ -40,42 +41,44 @@ main{padding:16px 24px;max-width:1440px;margin:0 auto;}
 .legend .dot{width:12px;height:12px;border-radius:3px;display:inline-block;}
 .legend .dot.round{border-radius:50%;}
 .tips{font-size:12px;color:var(--sub);}
-.zoombar{position:absolute;left:12px;bottom:12px;display:flex;flex-direction:column;gap:6px;}
+.zoombar{position:absolute;left:12px;bottom:12px;display:flex;flex-direction:column;gap:6px;z-index:5;}
 .zoombar button{width:32px;height:32px;border:1px solid var(--line);background:#fff;border-radius:6px;cursor:pointer;font-size:16px;color:var(--sub);}
 .zoombar button:hover{color:var(--main);}
+.layer-band{pointer-events:none;}
+.layer-label{pointer-events:none;font-size:12px;fill:#64748b;font-weight:600;}
 .empty{color:var(--sub);text-align:center;padding:30px;}
 </style>
 </head>
 <body>
 <header>
   <h1>DataWind 资产中心</h1>
-  <nav><a href="/">资产目录</a><a href="/lineage">血缘图谱</a><a href="/changes">变更监控</a></nav>
+  <nav><a href="/">资产目录</a><a href="/lineage" class="active">血缘查询</a><a href="/changes">变更监控</a></nav>
 </header>
 <main>
   <div class="panel">
     <div class="controls">
-      <label>节点</label>
-      <input id="node" placeholder="表名 db.table 或 数据集ID, 如 mv.mv_ods_zamloan_orderinfo_i_d / 10661314">
-      <label>方向</label>
+      <label>血缘对象</label>
+      <input id="node" placeholder="表: db.table 或数据集ID, 如 mv.mv_ods_zamloan_orderinfo_i_d / 10661314">
+      <label>查询方向</label>
       <select id="dir">
-        <option value="both">上下游(双向)</option>
-        <option value="down">下游(消费该节点的数据集)</option>
-        <option value="up">上游(该节点引用的来源表)</option>
+        <option value="both" selected>双向(上游+下游)</option>
+        <option value="down">仅下游(引用该对象的数据集)</option>
+        <option value="up">仅上游(该对象引用的表)</option>
       </select>
-      <label>深度</label>
+      <label>展开深度</label>
       <select id="depth">
-        <option value="1">1跳</option>
-        <option value="2" selected>2跳</option>
-        <option value="3">3跳</option>
+        <option value="1">1 跳</option>
+        <option value="2" selected>2 跳</option>
+        <option value="3">3 跳</option>
       </select>
-      <button id="q">查询血缘图</button>
-      <button class="ghost" id="fit">适配视图</button>
+      <button id="q">查询血缘</button>
+      <button class="ghost" id="fit">适配画布</button>
     </div>
-    <div class="tips" id="stat">输入表名或数据集ID，展示所有相关的表与数据集（表→数据集=数据流向，箭头方向）。拖动节点查看，点击节点看详情。</div>
+    <div class="tips" id="stat">输入表名(db.table)或数据集ID后点击查询。树状分层: 起点居中, 上游表逐层向左, 下游数据集逐层向右, 箭头为数据流向。</div>
   </div>
   <div class="panel">
     <div class="legend">
-      <span>分层:</span>
+      <span>节点类型:</span>
       <span class="item"><span class="dot" style="background:#2b6cb0"></span>mv</span>
       <span class="item"><span class="dot" style="background:#2f855a"></span>ods</span>
       <span class="item"><span class="dot" style="background:#805ad5"></span>dwd</span>
@@ -94,7 +97,7 @@ main{padding:16px 24px;max-width:1440px;margin:0 auto;}
       <div class="zoombar">
         <button id="zin" title="放大">+</button>
         <button id="zout" title="缩小">−</button>
-        <button id="zfit" title="适配">⤢</button>
+        <button id="zfit" title="适配画布">⛶</button>
       </div>
       <div id="detail"></div>
     </div>
@@ -104,119 +107,179 @@ main{padding:16px 24px;max-width:1440px;margin:0 auto;}
 const $ = id => document.getElementById(id);
 const LAYER_COLOR = {mv:'#2b6cb0',ods:'#2f855a',dwd:'#805ad5',dim:'#319795',dws:'#c05621',ads:'#c53030',tmp:'#718096',fin:'#234e70',other:'#8a7b60'};
 const DCOLOR = '#1a6d8a';
-let graph = null, pos = {}, dragging = null, scale = 1, tx = 0, ty = 0;
+const X_GAP = 300, Y_GAP = 74, NODE_H = 34, NODE_W_MIN = 132, NODE_W_MAX = 264, D_R = 40, PAD = 70;
+
+let graph = null, layers = {}, pos = {}, scale = 1, tx = 0, ty = 0;
+let W0 = 0, H0 = 0; // 画布逻辑尺寸
 
 function esc(s){ return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function nodeW(nd){
+  if (nd.kind === 'dataset') return D_R * 2;
+  const w = nd.table.length * 7.2 + 24;
+  return Math.max(NODE_W_MIN, Math.min(NODE_W_MAX, w));
+}
+function nodeId(nd){ return nd.id; }
 
-// ---------- 力导向布局 ----------
-function layout(nodes, edges, W, H){
-  const n = nodes.length, k = 0.28 * Math.sqrt(W * H / Math.max(n,1));
-  nodes.forEach((nd, i) => {
-    const a = 2 * Math.PI * i / Math.max(n,1);
-    pos[nd.id] = {x: W/2 + Math.cos(a) * W*0.3, y: H/2 + Math.sin(a) * H*0.3, vx:0, vy:0};
+// ---------- 分层布局: 起点居中, 上游逐层向左(负层), 下游逐层向右(正层) ----------
+function buildLayers(){
+  layers = {};
+  const startId = graph.start[0] === 't' ? 't:' + graph.start[1] : 'd:' + graph.start[1];
+  const inEdges = {}, outEdges = {};
+  graph.edges.forEach(e => {
+    (outEdges[e.from] = outEdges[e.from] || []).push(e.to);
+    (inEdges[e.to] = inEdges[e.to] || []).push(e.from);
   });
-  for (let it = 0; it < 180; it++){
-    // 斥力
-    for (let i = 0; i < n; i++){
-      for (let j = i+1; j < n; j++){
-        const a = pos[nodes[i].id], b = pos[nodes[j].id];
-        let dx = a.x - b.x, dy = a.y - b.y;
-        let d2 = dx*dx + dy*dy || 1;
-        const f = k*k / d2;
-        dx /= Math.sqrt(d2); dy /= Math.sqrt(d2);
-        a.vx += dx*f; a.vy += dy*f; b.vx -= dx*f; b.vy -= dy*f;
+  const dir = graph.direction;
+  // 下游 BFS: 沿出边 层+1
+  if (dir === 'both' || dir === 'down'){
+    layers[startId] = 0;
+    const q = [startId];
+    while (q.length){
+      const id = q.shift();
+      const l = layers[id];
+      for (const to of (outEdges[id] || [])){
+        if (!(to in layers)){ layers[to] = l + 1; q.push(to); }
       }
     }
-    // 弹簧(边)
-    const seen = new Set();
-    for (const e of edges){
-      const key = e.from < e.to ? e.from+'|'+e.to : e.to+'|'+e.from;
-      if (seen.has(key)) continue; seen.add(key);
-      const a = pos[e.from], b = pos[e.to]; if(!a||!b) continue;
-      let dx = b.x - a.x, dy = b.y - a.y;
-      const d = Math.sqrt(dx*dx+dy*dy) || 1;
-      const f = (d - k*1.2) * 0.04;
-      a.vx += (dx/d)*f; a.vy += (dy/d)*f; b.vx -= (dx/d)*f; b.vy -= (dy/d)*f;
-    }
-    // 向心力 + 速度阻尼
-    for (const nd of nodes){
-      const p = pos[nd.id];
-      p.vx += (W/2 - p.x) * 0.008; p.vy += (H/2 - p.y) * 0.008;
-      p.x += p.vx * 0.85; p.y += p.vy * 0.85;
-      p.vx *= 0.6; p.vy *= 0.6;
-      p.x = Math.max(20, Math.min(W-20, p.x)); p.y = Math.max(20, Math.min(H-20, p.y));
+  }
+  // 上游 BFS: 沿入边 层-1
+  if (dir === 'both' || dir === 'up'){
+    if (!(startId in layers)) layers[startId] = 0;
+    const q = [startId];
+    while (q.length){
+      const id = q.shift();
+      const l = layers[id];
+      for (const fr of (inEdges[id] || [])){
+        if (!(fr in layers)){ layers[fr] = l - 1; q.push(fr); }
+      }
     }
   }
+  // 层内排序: 稳定(表按库.表名, 数据集按名称)
+  const byLayer = {};
+  graph.nodes.forEach(nd => {
+    const l = layers[nd.id] ?? 0;
+    (byLayer[l] = byLayer[l] || []).push(nd);
+  });
+  Object.keys(byLayer).forEach(l => {
+    byLayer[l].sort((a,b) => a.kind === b.kind
+      ? (a.kind === 'table' ? (a.db + a.table).localeCompare(b.db + b.table) : (a.name || '').localeCompare(b.name || ''))
+      : (a.kind === 'table' ? -1 : 1));
+  });
+  return byLayer;
+}
+
+function layout(){
+  const byLayer = buildLayers();
+  const keys = Object.keys(byLayer).map(Number).sort((a,b) => a - b);
+  const minL = keys[0], maxL = keys[keys.length - 1];
+  const maxCnt = Math.max(...keys.map(k => byLayer[k].length), 1);
+  W0 = (maxL - minL + 1) * X_GAP + NODE_W_MAX + PAD * 2;
+  H0 = maxCnt * Y_GAP + PAD * 2;
+  const startId = graph.start[0] === 't' ? 't:' + graph.start[1] : 'd:' + graph.start[1];
+  const sNode = graph.nodes.find(n => n.id === startId);
+  const sw = sNode ? nodeW(sNode) / 2 : 0;
+  keys.forEach(k => {
+    const arr = byLayer[k];
+    const cnt = arr.length;
+    const yBase = (H0 - cnt * Y_GAP) / 2;
+    arr.forEach((nd, i) => {
+      const x = PAD + (k - minL) * X_GAP + nodeW(nd) / 2;
+      const y = yBase + i * Y_GAP + NODE_H / 2;
+      pos[nd.id] = { x, y };
+    });
+  });
+  return { byLayer, keys, minL, maxL, startId };
 }
 
 function render(){
   const svg = $('graph');
-  const W = svg.clientWidth || 900, H = svg.clientHeight || 600;
   if (!graph) return;
-  // 首次布局
-  if (!graph._lay) { layout(graph.nodes, graph.edges, W, H); graph._lay = true; }
-  let html = `<defs><marker id="arr" viewBox="0 0 10 10" refX="16" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-    <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/></marker></defs>`;
-  html += `<g transform="translate(${tx},${ty}) scale(${scale})">`;
-  // 边
+  const L = layout();
+  const byLayer = L.byLayer, keys = L.keys, minL = L.minL, startId = L.startId;
+  svg.setAttribute('viewBox', '0 0 ' + W0 + ' ' + H0);
+  svg.style.width = W0 * scale + 'px';
+  svg.style.height = H0 * scale + 'px';
+  svg.style.transform = 'translate(' + tx + 'px,' + ty + 'px)';
+
+  // 层背景带 + 层标签
+  let html = '';
+  html += `<defs><marker id="arr" viewBox="0 0 10 10" refX="16" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/></defs>`;
+  const bandH = H0;
+  keys.forEach(k => {
+    const x0 = PAD + (k - minL) * X_GAP - 4;
+    const w = X_GAP + 8;
+    const cx = x0 + w / 2;
+    const label = k === 0 ? '★ 起点' : (k < 0 ? '↑ 上游 ' + (-k) + ' 跳' : '↓ 下游 ' + k + ' 跳');
+    html += `<rect class="layer-band" x="${x0}" y="14" width="${w}" height="${bandH - 28}" rx="10" fill="${k < 0 ? '#eef4fb' : k > 0 ? '#f3fbf5' : '#fff7e8'}" opacity="0.55"/>`;
+    html += `<text class="layer-label" x="${cx}" y="${H0 - 18}" text-anchor="middle">${label}</text>`;
+  });
+
+  // 边: 贝塞尔 表→数据集 (数据流向从左到右)
   const seen = new Set();
+  html += `<g>`;
   for (const e of graph.edges){
-    const key = e.from < e.to ? e.from+'|'+e.to : e.to+'|'+e.from;
+    const key = e.from < e.to ? e.from + '|' + e.to : e.to + '|' + e.from;
     if (seen.has(key)) continue; seen.add(key);
-    const a = pos[e.from], b = pos[e.to]; if (!a||!b) continue;
-    const ex = b.x-a.x, ey = b.y-a.y, d = Math.sqrt(ex*ex+ey*ey)||1;
-    const ux = ex/d, uy = ey/d;
-    const r1 = nodeR(e.from), r2 = nodeR(e.to);
-    const sx = a.x+ux*r1, sy = a.y+uy*r1, exx = b.x-ux*r2, eyy = b.y-uy*r2;
-    html += `<line x1="${sx}" y1="${sy}" x2="${exx}" y2="${eyy}" stroke="#94a3b8" stroke-width="1.2" marker-end="url(#arr)"/>`;
+    const a = pos[e.from], b = pos[e.to]; if (!a || !b) continue;
+    const wa = nodeW(graph.nodes.find(n => n.id === e.from));
+    const wb = nodeW(graph.nodes.find(n => n.id === e.to));
+    const x1 = a.x + wa / 2, y1 = a.y;
+    const x2 = b.x - wb / 2, y2 = b.y;
+    const dx = Math.max(40, (x2 - x1) * 0.5);
+    html += `<path d="M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}" fill="none" stroke="#94a3b8" stroke-width="1.3" marker-end="url(#arr)"/>`;
   }
+  html += `</g>`;
+
   // 节点
   for (const nd of graph.nodes){
     const p = pos[nd.id]; if (!p) continue;
+    const isStart = nd.id === startId;
     if (nd.kind === 'table'){
       const c = LAYER_COLOR[nd.layer] || LAYER_COLOR.other;
-      const w = Math.max(86, nd.table.length * 7 + 20), h = 30;
-      html += `<g class="node" data-id="${nd.id}" transform="translate(${p.x-w/2},${p.y-h/2})" style="cursor:pointer">
-        <rect x="0" y="0" width="${w}" height="${h}" rx="6" fill="${c}" fill-opacity="0.12" stroke="${c}" stroke-width="1.4"/>
-        <text x="${w/2}" y="19" text-anchor="middle" font-size="11" fill="${c}" font-weight="600">${esc(nd.table)}</text></g>`;
+      const w = nodeW(nd), h = NODE_H;
+      html += `<g class="node" data-id="${nd.id}" transform="translate(${p.x - w / 2},${p.y - h / 2})" style="cursor:pointer">
+        <rect x="0" y="0" width="${w}" height="${h}" rx="6" fill="${c}" fill-opacity="0.12" stroke="${c}" stroke-width="${isStart ? 2.4 : 1.4}"/>
+        <text x="${w / 2}" y="21" text-anchor="middle" font-size="11" fill="${c}" font-weight="600">${esc(nd.table)}</text></g>`;
     } else {
-      html += `<g class="node" data-id="${nd.id}" transform="translate(${p.x-42},${p.y-42})" style="cursor:pointer">
-        <circle cx="42" cy="42" r="42" fill="${DCOLOR}" fill-opacity="0.1" stroke="${DCOLOR}" stroke-width="1.4"/>
-        <text x="42" y="44" text-anchor="middle" font-size="11" fill="${DCOLOR}" font-weight="600">${esc(nd.name.length>9?nd.name.slice(0,9)+'…':nd.name)}</text></g>`;
+      html += `<g class="node" data-id="${nd.id}" transform="translate(${p.x - D_R},${p.y - D_R})" style="cursor:pointer">
+        <circle cx="${D_R}" cy="${D_R}" r="${D_R}" fill="${DCOLOR}" fill-opacity="0.1" stroke="${DCOLOR}" stroke-width="${isStart ? 2.4 : 1.4}"/>
+        <text x="${D_R}" y="${D_R + 4}" text-anchor="middle" font-size="10.5" fill="${DCOLOR}" font-weight="600">${esc(nd.name.length > 8 ? nd.name.slice(0, 8) + '…' : nd.name)}</text></g>`;
     }
   }
-  html += `</g>`;
   svg.innerHTML = html;
-}
-
-function nodeR(id){
-  const nd = graph.nodes.find(x => x.id === id);
-  return nd && nd.kind === 'table' ? 15 : 42;
 }
 
 function applyView(){ render(); }
 
-$('zin').onclick = () => { scale *= 1.2; applyView(); };
-$('zout').onclick = () => { scale = Math.max(0.2, scale/1.2); applyView(); };
-const fit = () => { scale = 1; tx = 0; ty = 0; applyView(); };
+$('zin').onclick = () => { scale *= 1.25; applyView(); };
+$('zout').onclick = () => { scale = Math.max(0.15, scale / 1.25); applyView(); };
+function fit(){
+  const wrap = $('graph-wrap');
+  const cw = wrap.clientWidth - 20, ch = wrap.clientHeight - 20;
+  scale = Math.max(0.15, Math.min(cw / W0, ch / H0, 1.2));
+  tx = (wrap.clientWidth - W0 * scale) / 2;
+  ty = (wrap.clientHeight - H0 * scale) / 2;
+  applyView();
+}
 $('zfit').onclick = fit; $('fit').onclick = fit;
 
 async function query(){
   const node = $('node').value.trim();
-  if (!node){ $('stat').textContent = '请输入表名或数据集ID'; return; }
+  if (!node){ $('stat').textContent = '请输入表名(db.table)或数据集ID'; return; }
   const dir = $('dir').value, depth = $('depth').value;
   $('stat').textContent = '查询中...';
   const u = `/api/lineage/graph?node=${encodeURIComponent(node)}&direction=${dir}&depth=${depth}`;
   let d;
-  try { d = await (await fetch(u)).json(); } catch(e){ $('stat').textContent = '查询失败: '+e; return; }
+  try { d = await (await fetch(u)).json(); } catch(e){ $('stat').textContent = '查询失败: ' + e; return; }
   if (d.error){ $('stat').textContent = d.error; $('graph').innerHTML=''; graph=null; return; }
   graph = d; pos = {};
   const st = d.stats;
-  $('stat').innerHTML = `找到 <b>${st.tables}</b> 张表 / <b>${st.datasets}</b> 个数据集 / <b>${st.edges}</b> 条血缘边（${d.direction==='both'?'双向':d.direction==='down'?'下游':'上游'}，${d.depth}跳）· 拖动节点 / 滚轮缩放 / 点击节点看详情`;
+  $('stat').innerHTML = `共 <b>${st.tables}</b> 张表 / <b>${st.datasets}</b> 个数据集 / <b>${st.edges}</b> 条血缘边 · ${d.direction === 'both' ? '双向' : d.direction === 'down' ? '仅下游' : '仅上游'} ${d.depth} 跳 · 起点居中, 上游向左下游向右, 滚轮缩放/拖拽平移`;
   fit();
 }
 
-// 点击节点 -> 详情
+// 节点点击 -> 详情卡
 $('graph').addEventListener('click', ev => {
   const g = ev.target.closest('.node'); if (!g) return;
   const id = g.dataset.id;
@@ -233,16 +296,17 @@ function showDetail(nd){
     inner += `<h3>${esc(nd.db)}.${esc(nd.table)}</h3>`;
     const ds = graph.edges.filter(e => e.from === nd.id).map(e => graph.nodes.find(x => x.id === e.to)).filter(Boolean);
     const up = graph.edges.filter(e => e.to === nd.id).map(e => graph.nodes.find(x => x.id === e.from)).filter(Boolean);
-    if (up.length) { inner += `<div class="sec">上游(生产方)</div><ul>` + up.map(n => `<li>${esc(n.name)}</li>`).join('') + '</ul>'; }
-    inner += `<div class="sec">下游消费数据集 (${ds.length})</div>`;
-    inner += ds.length ? `<ul>` + ds.map(n => `<li><a href="/dataset/${n.dataset_id}">${esc(n.name)}</a> <span style="color:#94a3b8">#${n.dataset_id}</span></li>`).join('') + '</ul>' : '<div class="empty">无下游数据集</div>';
+    if (up.length) { inner += `<div class="sec">上游(引用来源)</div><ul>` + up.map(n => `<li>${esc(n.kind === 'table' ? n.db + '.' + n.table : n.name)}</li>`).join('') + '</ul>'; }
+    else inner += `<div class="sec">上游</div><div class="empty" style="padding:8px">该表为数据源头, 无上游生产逻辑</div>`;
+    inner += `<div class="sec">下游数据集 (${ds.length})</div>`;
+    inner += ds.length ? `<ul>` + ds.map(n => `<li><a href="/dataset/${n.dataset_id}">${esc(n.name)}</a> <span style="color:#94a3b8">#${n.dataset_id}</span></li>`).join('') + '</ul>' : '<div class="empty" style="padding:8px">暂无下游消费</div>';
   } else {
     inner += `<span class="tag" style="background:${DCOLOR}">数据集</span>`;
     inner += `<h3>${esc(nd.name)} <span style="color:#94a3b8;font-size:12px">#${nd.dataset_id}</span></h3>`;
-    inner += `<div class="sec">文件夹</div><ul><li>${esc(nd.folder_path || '根目录')}</li></ul>`;
+    inner += `<div class="sec">所属文件夹</div><ul><li>${esc(nd.folder_path || '未归档/根目录')}</li></ul>`;
     const ups = graph.edges.filter(e => e.to === nd.id).map(e => graph.nodes.find(x => x.id === e.from)).filter(Boolean);
-    inner += `<div class="sec">上游来源表 (${ups.length})</div>`;
-    inner += ups.length ? `<ul>` + ups.map(n => `<li>${esc(n.name)}</li>`).join('') + '</ul>' : '<div class="empty">无上游来源</div>';
+    inner += `<div class="sec">上游表 (${ups.length})</div>`;
+    inner += ups.length ? `<ul>` + ups.map(n => `<li>${esc(n.db)}.${esc(n.table)}</li>`).join('') + '</ul>' : '<div class="empty" style="padding:8px">无上游表</div>';
     inner += `<div class="sec"><a href="/dataset/${nd.dataset_id}">查看数据集详情 →</a></div>`;
   }
   box.innerHTML = `<button class="close">×</button>${inner}`;
@@ -250,20 +314,26 @@ function showDetail(nd){
 }
 $('detail').addEventListener('click', ev => { if (ev.target.classList.contains('close')) $('detail').style.display = 'none'; });
 
-// 拖动节点
-let dragOn = false;
-$('graph').addEventListener('mousedown', ev => {
-  const g = ev.target.closest('.node'); if (!g) return;
-  dragging = g.dataset.id; dragOn = true;
+// 画布平移(拖拽空白) + 滚轮缩放
+let pan = null;
+$('graph-wrap').addEventListener('mousedown', ev => {
+  if (ev.target.closest('.node') || ev.target.closest('button')) return;
+  pan = { x: ev.clientX, y: ev.clientY, tx, ty };
+  $('graph').classList.add('panning');
 });
 document.addEventListener('mousemove', ev => {
-  if (!dragging) return;
-  const svg = $('graph'); const r = svg.getBoundingClientRect();
-  pos[dragging].x = (ev.clientX - r.left - tx) / scale;
-  pos[dragging].y = (ev.clientY - r.top - ty) / scale;
-  render();
+  if (!pan) return;
+  tx = pan.tx + (ev.clientX - pan.x);
+  ty = pan.ty + (ev.clientY - pan.y);
+  applyView();
 });
-document.addEventListener('mouseup', () => { dragging = null; });
+document.addEventListener('mouseup', () => { pan = null; $('graph').classList.remove('panning'); });
+$('graph-wrap').addEventListener('wheel', ev => {
+  ev.preventDefault();
+  const f = ev.deltaY < 0 ? 1.12 : 1 / 1.12;
+  scale = Math.max(0.15, Math.min(3, scale * f));
+  applyView();
+}, { passive: false });
 
 $('node').addEventListener('keydown', e => { if (e.key === 'Enter') query(); });
 $('q').onclick = query;
