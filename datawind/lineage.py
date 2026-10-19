@@ -52,7 +52,36 @@ class LineageParser:
         return tables
 
     # ---------- 字段级 ----------
-    def _col_edges(self, ast):
+    def _alias_map(self, node, cte_names):
+        """收集 FROM/JOIN 的表名映射, 用于把列引用的表别名解析回真实表
+
+        node: 单个 Select(或任意AST节点); cte_names: 整棵AST的CTE别名集合
+        Returns:
+          alias_map:   {别名: 真实表名(db.table 或 table)}
+          bare_tables: 无别名直接引用的表名列表(用于单表场景兜底)
+        子查询(From (SELECT..) x)的别名 x 不加入映射——其内部表已在更内层 Select 独立解析;
+        CTE 名不是真实上游表, 从映射中排除(其内部表已由 CTE 内的 Select 独立解析)
+        """
+        alias_map = {}
+        bare_tables = []
+        # 遍历当前节点子树内的 FROM/JOIN: 对"CTE 引用层"而言, 能借到 CTE 内部的真实表做唯一表兜底,
+        # 补偿 SELECT * 类 CTE 无法内层产出具体列边的场景; 重复由解析层去重兜底
+        for node_ in node.find_all(exp.From, exp.Join):
+            src = node_.this
+            if not isinstance(src, exp.Table):
+                continue
+            name = src.name or ""
+            if not name or name in cte_names:
+                continue
+            real = ("%s.%s" % (src.db, name)) if src.db else name
+            alias = src.alias or ""
+            if alias:
+                alias_map[alias] = real
+            else:
+                bare_tables.append(real)
+        return alias_map, bare_tables
+
+    def _col_edges(self, ast, cte_names):
         """AST -> [(target, src, confidence)] 字段血缘边
 
         对每个 SELECT 投影列:
@@ -60,9 +89,26 @@ class LineageParser:
           - 无别名列引用:      target=列名, src=同列引用 (high)
           - 无别名表达式:      target=表达式文本, 提取其中列引用 (medium)
           - 无列引用(常量/聚合): target=表达式文本, src=None (pending)
+
+        来源表解析:
+          - 列引用带表前缀(别名): 经 alias_map 解析为真实表名(如 member_last_order)
+          - 列引用无前缀: 若当前 SELECT 引用的真实表唯一(无论是否带别名), 兜底填该表名;
+                          多表/无法唯一确定则留空
+          - 子查询/CTE 别名引用: 真实来源已由内层 Select 独立解析, 本层直接跳过该引用,
+                          避免与内层真实边重复; 若整列仅剩未解析引用则跳过该投影列
         """
         edges = []
         for sel in ast.find_all(exp.Select):
+            # 每个 SELECT 各自构建一次映射, 避免跨查询串扰
+            alias_map, bare_tables = self._alias_map(sel, cte_names)
+            # 唯一真实表兜底: 有别名时看别名集合去重后是否唯一; 无别名时看裸表是否唯一
+            unique_real = None
+            if alias_map:
+                reals = set(alias_map.values())
+                if len(reals) == 1:
+                    unique_real = next(iter(reals))
+            elif len(bare_tables) == 1:
+                unique_real = bare_tables[0]
             for proj in sel.expressions:
                 if isinstance(proj, exp.Alias):
                     target = proj.alias or ""
@@ -77,12 +123,25 @@ class LineageParser:
                         target = proj.sql() or ""
                 if not target:
                     continue
-                # 去重保序提取列引用
+                # 去重保序提取列引用(带真实表解析); 未解析的别名引用标记 unresolved 并跳过
                 src_cols = []
                 seen = set()
+                unresolved = False
                 for c in src_expr.find_all(exp.Column):
-                    tbl, name = c.table or "", c.name or ""
-                    ref = ("%s.%s" % (tbl, name)) if tbl else name
+                    name = c.name or ""
+                    tbl_alias = c.table or ""
+                    real = ""
+                    if tbl_alias:
+                        real = alias_map.get(tbl_alias, "")
+                    elif unique_real:
+                        real = unique_real
+                    if real:
+                        ref = "%s.%s" % (real, name)
+                    elif tbl_alias:
+                        unresolved = True  # 子查询/CTE 别名, 内层已独立解析
+                        continue
+                    else:
+                        ref = name
                     if ref and ref not in seen:
                         seen.add(ref)
                         src_cols.append(ref)
@@ -91,6 +150,9 @@ class LineageParser:
                 elif src_cols:
                     for c in src_cols:
                         edges.append((target, c, "medium"))
+                elif unresolved and isinstance(src_expr, exp.Column):
+                    # 整列仅剩子查询/CTE 别名引用: 内层 Select 已覆盖, 本层跳过避免重复
+                    continue
                 else:
                     edges.append((target, None, "pending"))
         return edges
@@ -114,7 +176,17 @@ class LineageParser:
                 kw = {"read": dia} if dia else {}
                 ast = sqlglot.parse_one(sql, **kw)
                 tables = sorted(self._tables(ast))
-                cols = self._col_edges(ast)
+                # CTE 名从整棵 AST 根收集(嵌套 WITH 也能覆盖), 供各层 Select 过滤
+                cte_names = {c.alias for c in ast.find_all(exp.CTE)}
+                cols = self._col_edges(ast, cte_names)
+                # 解析层去重保序(同 target/src/conf 只保留一条, 防嵌套层级重复产出)
+                seen_e = set()
+                cols_dedup = []
+                for e in cols:
+                    if e not in seen_e:
+                        seen_e.add(e)
+                        cols_dedup.append(e)
+                cols = cols_dedup
                 conf_dist = {}
                 for _, _, c in cols:
                     conf_dist[c] = conf_dist.get(c, 0) + 1
