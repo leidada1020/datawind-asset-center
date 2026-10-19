@@ -327,3 +327,61 @@ PROPERTIES (
     "dynamic_partition.prefix" = "p", "dynamic_partition.replication_num" = "2",
     "replication_num" = "2"
 );
+
+-- ============================================================
+-- 5. DolphinScheduler 调度资产（v2.3 新增, 调度平台对接: 闭环一盘点 + 闭环二表间血缘）
+--    数据来源: DS API(认证 token 头) 项目->工作流->任务节点+SQL
+--    dt datev2 分区 + etl_time, _s_d 命名, 重跑先删当日分区再全量
+-- ============================================================
+
+-- 5.1 DS 调度任务资产快照: 任务节点名=数仓产出表名
+CREATE TABLE IF NOT EXISTS {db}.ods_ds_workflow_s_d (
+    dt              DATE         NOT NULL COMMENT '数据日期(分区键)=抓取日',
+    project_code    BIGINT       NOT NULL COMMENT 'DS项目编码(projects.code, 如18631453023104)',
+    workflow_code   BIGINT       NOT NULL COMMENT '工作流定义编码(process-definition.code)',
+    task_code       BIGINT       NOT NULL COMMENT '任务定义编码(taskDefinition.code)',
+    project_name    VARCHAR(128) COMMENT 'DS项目名(如 ODS/DWD/DWS/ADS/STG/ETL, 按数仓分层组织)',
+    workflow_name   VARCHAR(255) COMMENT '工作流名(业务线, 如 zamloan2/fastako/biumoney)',
+    release_state   VARCHAR(16)  COMMENT '工作流发布状态: ONLINE=已上线 OFFLINE=已下线',
+    task_name       VARCHAR(255) COMMENT '任务名=数仓产出表名(如 ods_zamloan2_member_i_d)',
+    task_type       VARCHAR(32)  COMMENT '任务类型: SQL=SQL任务 SHELL=Shell任务(脚本/命令行)',
+    task_flag       VARCHAR(16)  COMMENT '任务启用标志: YES=启用 NO=停用',
+    sql_text        TEXT         COMMENT '任务SQL全文(建表+INSERT, SHELL任务为空)',
+    etl_time        DATETIME     NOT NULL COMMENT '数据处理时间,本次ETL写入时刻(UTC)'
+) ENGINE=OLAP
+UNIQUE KEY(dt, project_code, workflow_code, task_code)
+COMMENT 'DolphinScheduler调度任务资产每日快照(s_d): 任务=数仓产出表, 支撑调度资产盘点/任务清单/调度频率对齐与血缘SQL回查; dt分区+etl_time, 重跑先删当日分区再全量'
+PARTITION BY RANGE(dt) ()
+DISTRIBUTED BY HASH(workflow_code) BUCKETS 8
+PROPERTIES (
+    "dynamic_partition.enable" = "true", "dynamic_partition.time_unit" = "DAY",
+    "dynamic_partition.start" = "-30", "dynamic_partition.end" = "3",
+    "dynamic_partition.prefix" = "p", "dynamic_partition.replication_num" = "2",
+    "replication_num" = "2"
+);
+
+-- 5.2 DS 任务SQL表间血缘边快照: INSERT->SELECT 生成 Doris 表->表生产依赖
+CREATE TABLE IF NOT EXISTS {db}.ods_ds_lineage_s_d (
+    dt              DATE         NOT NULL COMMENT '数据日期(分区键)=抓取日',
+    workflow_code   BIGINT       NOT NULL COMMENT '工作流定义编码',
+    task_code       BIGINT       NOT NULL COMMENT '任务定义编码',
+    dst_db          VARCHAR(64)  COMMENT '产出表库(INSERT目标, 如 ods)',
+    dst_table       VARCHAR(256) COMMENT '产出表名(INSERT目标, 如 ods_zamloan2_member_i_d)',
+    src_db          VARCHAR(64)  COMMENT '上游表库(SELECT来源, 可为空=use语句或未识别)',
+    src_table       VARCHAR(256) COMMENT '上游表名(SELECT来源)',
+    project_code    BIGINT       COMMENT 'DS项目编码',
+    project_name    VARCHAR(128) COMMENT 'DS项目名',
+    workflow_name   VARCHAR(255) COMMENT '工作流名',
+    task_name       VARCHAR(255) COMMENT '任务名=产出表名',
+    etl_time        DATETIME     NOT NULL COMMENT '数据处理时间,本次ETL写入时刻(UTC)'
+) ENGINE=OLAP
+UNIQUE KEY(dt, workflow_code, task_code, dst_db, dst_table, src_db, src_table)
+COMMENT 'DolphinScheduler任务SQL表间血缘边每日快照(s_d): 解析任务SQL INSERT->SELECT 生成 Doris 表->表生产依赖, 补齐血缘图谱表的上游生产逻辑; dt分区+etl_time, 重跑先删当日分区再全量'
+PARTITION BY RANGE(dt) ()
+DISTRIBUTED BY HASH(workflow_code) BUCKETS 8
+PROPERTIES (
+    "dynamic_partition.enable" = "true", "dynamic_partition.time_unit" = "DAY",
+    "dynamic_partition.start" = "-30", "dynamic_partition.end" = "3",
+    "dynamic_partition.prefix" = "p", "dynamic_partition.replication_num" = "2",
+    "replication_num" = "2"
+);

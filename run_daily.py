@@ -219,7 +219,9 @@ def main():
     doris.create_table(ddl_mod.DDL_CLOSURE.format(db=doris.db))
     doris.create_table(ddl_mod.DDL_DORIS_TABLE.format(db=doris.db))
     doris.create_table(ddl_mod.DDL_DORIS_COLUMN.format(db=doris.db))
-    print("==> 表已就绪: 快照/变更/文件夹/表血缘/字段血缘/解析统计/闭包/Doris表资产/Doris字段资产")
+    doris.create_table(ddl_mod.DDL_DS_WORKFLOW.format(db=doris.db))
+    doris.create_table(ddl_mod.DDL_DS_LINEAGE.format(db=doris.db))
+    print("==> 表已就绪: 快照/变更/文件夹/表血缘/字段血缘/解析统计/闭包/Doris表资产/Doris字段资产/DS调度资产/DS表间血缘")
 
     # 文件夹树快照写入
     etl_time = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -346,6 +348,20 @@ def main():
         print("    Doris 资产快照: 表=%d 字段=%d (dt=%s, 库数=15)" % (n_t, n_c, stat_date))
     except Exception as e:
         print("    [警告] Doris 资产采集失败(不影响 DataWind 主流程): %s" % e)
+
+    # DolphinScheduler 调度资产采集（每日全量, 独立 try 不影响主流程; cfg.ds.enabled=false 则跳过）
+    try:
+        from datawind.ds_assets import collect_ds_assets
+        print("==> 采集 DolphinScheduler 调度资产 ...")
+        ds_stat = collect_ds_assets(doris, cfg, stat_date, etl_time)
+        if ds_stat:
+            print("    DS 调度资产: 项目=%d 工作流=%d 任务=%d(SQL=%d) 表间血缘边=%d (dt=%s)"
+                  % (ds_stat["projects"], ds_stat["workflows"], ds_stat["tasks"],
+                     ds_stat["sql_tasks"], ds_stat["lineage_edges"], stat_date))
+        else:
+            print("    DS 采集未启用(配置 ds.enabled 缺失或 false), 跳过")
+    except Exception as e:
+        print("    [警告] DS 调度资产采集失败(不影响主流程): %s" % e)
 
     # 校验
     cnt = doris.count(TBL_SNAPSHOT.format(db=doris.db), "dt=%s", (stat_date,))

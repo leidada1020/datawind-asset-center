@@ -41,6 +41,18 @@ def load_config(path=None):
             else:
                 cfg[key] = val
 
+    # DS 调度平台(可选): 环境变量 DS_BASE_URL / DS_TOKEN / DS_ENABLED 可覆盖
+    ds_cfg = cfg.setdefault("ds", {})
+    ds_base = os.environ.get("DS_BASE_URL")
+    if ds_base:
+        ds_cfg["base_url"] = ds_base
+    ds_token = os.environ.get("DS_TOKEN")
+    if ds_token:
+        ds_cfg["token"] = ds_token
+    ds_enabled = os.environ.get("DS_ENABLED")
+    if ds_enabled is not None:
+        ds_cfg["enabled"] = ds_enabled.lower() in ("1", "true", "yes")
+
     required = ["api_base", "region", "client_id", "client_secret", "app_id"]
     missing = [k for k in required if not cfg.get(k)]
     if missing:
