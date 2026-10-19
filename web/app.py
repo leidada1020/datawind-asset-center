@@ -92,6 +92,30 @@ def api_folders():
         d.close()
 
 
+@app.get("/api/folder_tree")
+def api_folder_tree():
+    """文件夹树(带数据集计数): 资产目录按 DataWind 数据集目录导航"""
+    d = get_doris()
+    try:
+        dt = latest_dt(d)
+        if not dt:
+            return JSONResponse({"error": "无快照数据"}, status_code=404)
+        rows = d.exec(
+            "SELECT folder_id, parent_id, folder_name, folder_path "
+            "FROM etl.dim_datawind_folder_s_d WHERE dt=%s ORDER BY folder_path", (str(dt),), fetch=True)
+        cnts = {r[0] or "": r[1] for r in d.exec(
+            "SELECT folder_path, COUNT(*) FROM etl.ods_datawind_dataset_s_d WHERE dt=%s GROUP BY folder_path",
+            (str(dt),), fetch=True)}
+        total = sum(cnts.values())
+        items = []
+        for r in rows:
+            items.append({"id": r[0], "parent": r[1], "name": r[2],
+                          "path": r[3] or "", "cnt": cnts.get(r[3] or "", 0)})
+        return {"items": items, "total": total}
+    finally:
+        d.close()
+
+
 # ---------------- 资产目录 ----------------
 @app.get("/api/datasets")
 def api_datasets(keyword: str = "", folder: str = "", type_code: str = "",

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>DataWind 资产中心</title>
+<title>资产目录 - DataWind 资产中心</title>
 <style>
 :root{--main:#1a6d8a;--bg:#f5f7fa;--card:#fff;--line:#e2e8f0;--text:#1f2329;--sub:#646a73;--accent:#d97706;}
 *{box-sizing:border-box;margin:0;padding:0;}
@@ -14,29 +14,41 @@ header nav a{color:var(--sub);text-decoration:none;margin-right:16px;font-size:1
 header nav a.active,header nav a:hover{color:var(--main);border-bottom:2px solid var(--main);}
 header .dt{font-size:13px;color:var(--sub);margin-left:auto;}
 main{padding:20px 24px;max-width:1440px;margin:0 auto;}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:20px;}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-bottom:20px;}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:16px;}
 .card .num{font-size:26px;font-weight:600;color:var(--main);}
 .card .lbl{font-size:13px;color:var(--sub);margin-top:4px;}
-.panel{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:16px 20px;margin-bottom:20px;}
-.panel h2{font-size:15px;margin-bottom:12px;color:var(--text);}
+.layout{display:flex;gap:16px;align-items:flex-start;}
+.side{width:300px;flex-shrink:0;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px;}
+.side h2{font-size:14px;margin-bottom:10px;color:var(--text);}
+.modes{display:flex;gap:8px;margin-bottom:12px;}
+.modes button{flex:1;border:1px solid var(--line);background:#fff;border-radius:6px;padding:7px 4px;font-size:13px;cursor:pointer;color:var(--sub);}
+.modes button.active{background:var(--main);border-color:var(--main);color:#fff;font-weight:600;}
+.tree{max-height:640px;overflow:auto;font-size:13px;}
+.tnode{padding:5px 6px;cursor:pointer;border-radius:5px;display:flex;align-items:center;gap:6px;white-space:nowrap;}
+.tnode:hover{background:#f0f4f7;}
+.tnode.sel{background:#e8f0f4;color:var(--main);font-weight:600;}
+.tnode .tw{width:10px;flex-shrink:0;color:var(--sub);font-size:11px;}
+.tnode .nm{overflow:hidden;text-overflow:ellipsis;}
+.tnode .cnt{margin-left:auto;color:var(--sub);font-size:12px;flex-shrink:0;}
+.tnode .dot{width:10px;height:10px;border-radius:3px;flex-shrink:0;display:inline-block;}
+.tchildren{padding-left:18px;}
+.content{flex:1;min-width:0;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:16px 20px;}
 .filters{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;}
 .filters input,.filters select{border:1px solid var(--line);border-radius:6px;padding:7px 10px;font-size:13px;background:#fff;}
-.filters input{width:220px;}
+.filters input{width:240px;}
+.filters .crumb{font-size:13px;color:var(--main);font-weight:600;display:flex;align-items:center;gap:6px;}
+.filters .crumb .x{cursor:pointer;color:var(--sub);font-weight:400;}
 table{width:100%;border-collapse:collapse;font-size:13px;}
-th{background:#f0f4f7;color:var(--sub);text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);font-weight:600;}
+th{background:#f0f4f7;color:var(--sub);text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);font-weight:600;white-space:nowrap;}
 td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top;}
 tr:hover td{background:#f8fafb;}
 a.ds{color:var(--main);text-decoration:none;font-weight:500;}
 a.ds:hover{text-decoration:underline;}
 .badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px;background:#e8f0f4;color:var(--main);}
-.badge.warn{background:#fdf0e3;color:var(--accent);}
 .pager{display:flex;gap:10px;align-items:center;margin-top:14px;font-size:13px;color:var(--sub);}
 .pager button{border:1px solid var(--line);background:#fff;border-radius:6px;padding:5px 12px;cursor:pointer;}
 .pager button:disabled{opacity:.4;cursor:default;}
-.chart-row{display:flex;gap:20px;flex-wrap:wrap;}
-.chart-box{flex:1;min-width:300px;}
-.chart-box svg{width:100%;height:auto;}
 .changes li{list-style:none;padding:8px 0;border-bottom:1px dashed var(--line);font-size:13px;}
 .changes .t{display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px;margin-right:8px;background:#e8f0f4;color:var(--main);}
 .changes .t.added{background:#e6f4ea;color:#1a7f37;}
@@ -47,6 +59,8 @@ a.ds:hover{text-decoration:underline;}
 .changes .t.data_synced{background:#f0f4f7;color:#475569;}
 .changes .t.rows_changed{background:#f0f4f7;color:#475569;}
 .empty{color:var(--sub);text-align:center;padding:30px;font-size:14px;}
+.layer-legend{font-size:12px;color:var(--sub);display:flex;gap:12px;flex-wrap:wrap;margin-bottom:4px;}
+.layer-legend .item{display:flex;align-items:center;gap:4px;}
 </style>
 </head>
 <body>
@@ -62,54 +76,64 @@ a.ds:hover{text-decoration:underline;}
 <main>
   <div class="cards" id="cards"></div>
 
-  <div class="panel">
-    <h2>资产目录
-      <span style="margin-left:16px;font-size:13px;color:var(--sub);">
-        <label style="cursor:pointer;"><input type="radio" name="view" value="dataset" checked onchange="switchView('dataset')"> DataWind 数据集</label>
-        &nbsp;&nbsp;
-        <label style="cursor:pointer;"><input type="radio" name="view" value="doris" onchange="switchView('doris')"> Doris 表资产</label>
-      </span>
-    </h2>
-    <div class="filters" id="filtersDs">
-      <input id="kw" placeholder="搜索名称/ID">
-      <input id="folder" placeholder="文件夹路径(如 /ZamLoan/风控)">
-      <select id="type"></select>
-      <button id="searchBtn" style="border:1px solid var(--line);background:#fff;border-radius:6px;padding:7px 16px;cursor:pointer;">查询</button>
-      <span style="margin-left:auto;font-size:13px;color:var(--sub);" id="totalLabel"></span>
+  <div class="layout">
+    <div class="side">
+      <h2>资产导航</h2>
+      <div class="modes">
+        <button id="mLayer" class="active" onclick="switchMode('layer')">数仓分层</button>
+        <button id="mFolder" onclick="switchMode('folder')">数据集目录</button>
+      </div>
+      <div class="layer-legend" id="layerLegend" style="display:none;">
+        <span class="item"><span class="dot" style="background:#2b6cb0"></span>mv</span>
+        <span class="item"><span class="dot" style="background:#2f855a"></span>ods</span>
+        <span class="item"><span class="dot" style="background:#805ad5"></span>dwd</span>
+        <span class="item"><span class="dot" style="background:#319795"></span>dim</span>
+        <span class="item"><span class="dot" style="background:#c05621"></span>dws</span>
+        <span class="item"><span class="dot" style="background:#c53030"></span>ads</span>
+        <span class="item"><span class="dot" style="background:#718096"></span>tmp</span>
+        <span class="item"><span class="dot" style="background:#234e70"></span>fin</span>
+        <span class="item"><span class="dot" style="background:#8a7b60"></span>other</span>
+      </div>
+      <div class="tree" id="tree"></div>
     </div>
-    <div class="filters" id="filtersDoris" style="display:none;">
-      <input id="kwD" placeholder="搜索表名/表注释">
-      <select id="dbSel"><option value="">全部库</option></select>
-      <select id="layerSel"><option value="">全部分层</option></select>
-      <button id="searchBtnD" style="border:1px solid var(--line);background:#fff;border-radius:6px;padding:7px 16px;cursor:pointer;">查询</button>
-      <span style="margin-left:auto;font-size:13px;color:var(--sub);" id="totalLabelD"></span>
-    </div>
-    <div style="overflow-x:auto;">
-      <table>
-        <thead id="thDs"><tr><th>ID</th><th>名称</th><th>文件夹</th><th>类型</th><th>调度</th><th>状态</th><th>行数</th><th>上次同步</th><th>来源表</th></tr></thead>
-        <thead id="thDoris" style="display:none;"><tr><th>库.表</th><th>类型</th><th>引擎</th><th>行数</th><th>数据量</th><th>建表时间</th><th>最近更新</th><th>分层</th><th>注释</th></tr></thead>
-        <tbody id="tb"></tbody>
-      </table>
-    </div>
-    <div class="pager">
-      <button id="prevBtn">上一页</button><span id="pageLabel"></span><button id="nextBtn">下一页</button>
+
+    <div class="content">
+      <div class="filters">
+        <span class="crumb" id="crumb"></span>
+        <input id="kw" placeholder="搜索名称/ID/表名">
+        <button id="searchBtn" style="border:1px solid var(--line);background:#fff;border-radius:6px;padding:7px 16px;cursor:pointer;">查询</button>
+        <span style="margin-left:auto;font-size:13px;color:var(--sub);" id="totalLabel"></span>
+      </div>
+      <div style="overflow-x:auto;">
+        <table>
+          <thead id="th"><tr><th>ID / 库.表</th><th>名称 / 表名</th><th>目录 / 分层</th><th>类型</th><th>调度 / 行数</th><th>状态 / 大小</th><th>上次同步 / 最近更新</th><th>来源表 / 注释</th></tr></thead>
+          <tbody id="tb"></tbody>
+        </table>
+      </div>
+      <div class="pager">
+        <button id="prevBtn">上一页</button><span id="pageLabel"></span><button id="nextBtn">下一页</button>
+      </div>
     </div>
   </div>
 
-  <div class="panel">
-    <h2>最近变更（今日）</h2>
-    <ul class="changes" id="changesList"></ul>
+  <div style="margin-top:20px;">
+    <div class="panel" style="background:var(--card);border:1px solid var(--line);border-radius:8px;padding:16px 20px;">
+      <h2 style="font-size:15px;margin-bottom:12px;">最近变更（今日）</h2>
+      <ul class="changes" id="changesList"></ul>
+    </div>
   </div>
 </main>
 
 <script>
-let page = 1, total = 0, view = 'dataset';
+let page = 1, total = 0, mode = 'layer';
+let layerSel = '', dbSel = '', folderSel = '', folderName = '';
 const $ = id => document.getElementById(id);
+const LAYER_COLOR = {mv:'#2b6cb0',ods:'#2f855a',dwd:'#805ad5',dim:'#319795',dws:'#c05621',ads:'#c53030',tmp:'#718096',fin:'#234e70',other:'#8a7b60'};
+const LAYER_ORDER = ['mv','ods','dwd','dim','dws','ads','tmp','fin','other'];
 
 async function j(url){ const r = await fetch(url); return r.json(); }
-
-function esc(s){ return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
-function trim(s, n){ return s.length > n ? s.slice(0, n) + '…' : s; }
+function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function trim(s, n){ return String(s).length > n ? String(s).slice(0, n) + '…' : s; }
 function fmtSize(n){ if (n == null) return '-'; const u=['B','KB','MB','GB','TB']; let i=0; while (n>=1024 && i<u.length-1){ n/=1024; i++; } return n.toFixed(1)+' '+u[i]; }
 
 async function loadStats(){
@@ -124,29 +148,132 @@ async function loadStats(){
     `<div class="card"><div class="num">${c[1]}</div><div class="lbl">${c[0]}</div></div>`).join('');
 }
 
-async function loadTypes(){
-  const ts = await j('/api/types');
-  $('type').innerHTML = '<option value="">全部类型</option>' + ts.map(t =>
-    `<option value="${t.code}">${t.name} (${t.cnt})</option>`).join('');
+// ---------- 左侧导航树 ----------
+let layerTree = [], folderTree = [];
+
+async function loadTrees(){
+  layerTree = await j('/api/doris/layers');
+  folderTree = await j('/api/folder_tree');
+  renderTree();
 }
 
-async function loadLayers(){
-  const ls = await j('/api/doris/layers');
-  const dbSet = new Set(), layerSet = new Set();
-  for (const l of ls){ dbSet.add(l.db); layerSet.add(l.layer); }
-  $('dbSel').innerHTML = '<option value="">全部库</option>' + [...dbSet].sort().map(d =>
-    `<option value="${d}">${d}</option>`).join('');
-  $('layerSel').innerHTML = '<option value="">全部分层</option>' + [...layerSet].sort().map(l =>
-    `<option value="${l}">${l}</option>`).join('');
+function renderTree(){
+  const t = $('tree');
+  if (mode === 'layer'){
+    $('layerLegend').style.display = '';
+    const byLayer = {};
+    layerTree.forEach(x => { (byLayer[x.layer] = byLayer[x.layer] || []).push(x); });
+    const layers = LAYER_ORDER.filter(l => byLayer[l]).concat(
+      Object.keys(byLayer).filter(l => !LAYER_ORDER.includes(l)).sort());
+    let h = '';
+    layers.forEach(l => {
+      const dbs = byLayer[l].sort((a,b) => a.db.localeCompare(b.db));
+      const cnt = dbs.reduce((s,x) => s + x.cnt, 0);
+      const open = layerSel === l;
+      h += `<div class="tnode ${layerSel === l && !dbSel ? 'sel' : ''}" onclick="pickLayer('${l}')">
+        <span class="tw">${open ? '▾' : '▸'}</span>
+        <span class="dot" style="background:${LAYER_COLOR[l] || '#8a7b60'}"></span>
+        <span class="nm">${esc(l)}</span><span class="cnt">${cnt}</span></div>`;
+      if (open) h += `<div class="tchildren">` + dbs.map(x =>
+        `<div class="tnode ${dbSel === x.db ? 'sel' : ''}" onclick="pickDb('${l}','${esc(x.db)}')">
+          <span class="tw"></span><span class="nm">${esc(x.db)}</span><span class="cnt">${x.cnt}</span></div>`).join('') + '</div>';
+    });
+    t.innerHTML = h || '<div class="empty">暂无分层数据</div>';
+  } else {
+    $('layerLegend').style.display = 'none';
+    const byId = {}; folderTree.items.forEach(f => byId[f.id] = f);
+    const kids = id => folderTree.items.filter(f => f.parent === id);
+    const rootKids = folderTree.items.filter(f => !f.parent || f.parent === 0 || f.parent === null);
+    const openAll = !folderSel;
+    function nodeHtml(f){
+      const children = kids(f.id);
+      const open = openAll || folderSel === f.path;
+      let h = `<div class="tnode ${folderSel === f.path ? 'sel' : ''}" onclick="pickFolder('${esc(f.path)}','${esc(f.name)}')">
+        <span class="tw">${children.length ? (open ? '▾' : '▸') : ''}</span>
+        <span class="nm">${esc(f.name)}</span><span class="cnt">${f.cnt || ''}</span></div>`;
+      if (open && children.length){
+        h += `<div class="tchildren">` + children.map(nodeHtml).join('') + '</div>';
+      }
+      return h;
+    }
+    let h = `<div class="tnode ${!folderSel ? 'sel' : ''}" onclick="pickFolder('','全部')">
+      <span class="tw">▾</span><span class="nm">全部数据集</span><span class="cnt">${folderTree.total || ''}</span></div><div class="tchildren">`;
+    h += rootKids.map(nodeHtml).join('');
+    h += '</div>';
+    t.innerHTML = h;
+  }
+}
+
+function pickLayer(l){
+  if (layerSel === l && !dbSel){ layerSel = ''; dbSel = ''; }
+  else { layerSel = l; dbSel = ''; }
+  page = 1; renderTree(); renderCrumb(); loadList();
+}
+function pickDb(l, db){
+  layerSel = l;
+  dbSel = dbSel === db ? '' : db;
+  page = 1; renderTree(); renderCrumb(); loadList();
+}
+function pickFolder(p, n){
+  folderSel = p; folderName = p ? n : '';
+  page = 1; renderTree(); renderCrumb(); loadList();
+}
+
+function switchMode(m){
+  mode = m; layerSel = ''; dbSel = ''; folderSel = ''; folderName = '';
+  $('mLayer').classList.toggle('active', m === 'layer');
+  $('mFolder').classList.toggle('active', m === 'folder');
+  $('kw').value = ''; page = 1;
+  setTh(m); renderTree(); renderCrumb(); loadList();
+}
+
+function renderCrumb(){
+  if (mode === 'layer'){
+    const parts = [];
+    if (layerSel) parts.push(`<span>${esc(layerSel)}</span>`);
+    if (dbSel) parts.push(`<span>${esc(dbSel)}</span>`);
+    $('crumb').innerHTML = parts.length
+      ? `<span class="x" onclick="pickLayer('${layerSel}');">数仓分层</span> / ${parts.join(' / ')}`
+      : '数仓分层';
+  } else {
+    $('crumb').innerHTML = folderSel
+      ? `<span class="x" onclick="pickFolder('','全部')">数据集目录</span> / <span>${esc(folderName)}</span>`
+      : '数据集目录';
+  }
+}
+
+// ---------- 右侧资产列表 ----------
+function setTh(m){
+  $('th').innerHTML = m === 'layer'
+    ? '<tr><th>库.表</th><th>表名</th><th>分层</th><th>类型</th><th>引擎</th><th>行数</th><th>数据量</th><th>最近更新</th><th>注释</th></tr>'
+    : '<tr><th>ID</th><th>名称</th><th>文件夹</th><th>类型</th><th>调度</th><th>状态</th><th>行数</th><th>上次同步</th><th>来源表</th></tr>';
 }
 
 async function loadList(){
-  if (view === 'dataset'){
-    const kw = encodeURIComponent($('kw').value);
-    const folder = encodeURIComponent($('folder').value);
-    const type = $('type').value;
-    const d = await j(`/api/datasets?keyword=${kw}&folder=${folder}&type_code=${type}&page=${page}&size=20`);
-    if (d.error){ $('tb').innerHTML = `<tr><td colspan="8" class="empty">${d.error}</td></tr>`; return; }
+  const kw = encodeURIComponent($('kw').value.trim());
+  if (mode === 'layer'){
+    const q = `/api/doris/tables?keyword=${kw}&layer=${encodeURIComponent(layerSel)}&db=${encodeURIComponent(dbSel)}&page=${page}&size=20`;
+    const d = await j(q);
+    if (d.error){ $('tb').innerHTML = `<tr><td colspan="9" class="empty">${d.error}</td></tr>`; return; }
+    total = d.total; $('totalLabel').textContent = `共 ${total} 张表`;
+    $('pageLabel').textContent = `第 ${d.page} / ${Math.max(1, Math.ceil(total/d.size))} 页`;
+    $('prevBtn').disabled = page <= 1;
+    $('nextBtn').disabled = page * d.size >= total;
+    $('tb').innerHTML = d.items.map(i => `<tr>
+      <td><a class="ds" href="/lineage?node=${encodeURIComponent(i.db + '.' + i.table)}">${esc(i.db)}.${esc(i.table)}</a></td>
+      <td>${esc(i.table)}</td>
+      <td><span class="badge">${esc(i.layer)}</span></td>
+      <td>${i.type === 'BASE TABLE' ? '物理表' : '视图'}</td>
+      <td>${esc(i.engine)}</td>
+      <td>${i.rows ?? '-'}</td>
+      <td>${fmtSize(i.size)}</td>
+      <td>${esc(i.utime)}</td>
+      <td title="${esc(i.comment)}">${esc(trim(i.comment, 40))}</td>
+    </tr>`).join('');
+  } else {
+    const q = `/api/datasets?keyword=${kw}&folder=${encodeURIComponent(folderSel)}&page=${page}&size=20`;
+    const d = await j(q);
+    if (d.error){ $('tb').innerHTML = `<tr><td colspan="9" class="empty">${d.error}</td></tr>`; return; }
     total = d.total; $('totalLabel').textContent = `共 ${total} 个数据集`;
     $('pageLabel').textContent = `第 ${d.page} / ${Math.max(1, Math.ceil(total/d.size))} 页`;
     $('prevBtn').disabled = page <= 1;
@@ -161,27 +288,6 @@ async function loadList(){
       <td>${i.rows_cnt ?? '-'}</td>
       <td>${esc(i.last_sync)}</td>
       <td title="${esc(i.source_tables)}">${esc(trim(i.source_tables, 40))}</td>
-    </tr>`).join('');
-  } else {
-    const kw = encodeURIComponent($('kwD').value);
-    const db = encodeURIComponent($('dbSel').value);
-    const layer = encodeURIComponent($('layerSel').value);
-    const d = await j(`/api/doris/tables?keyword=${kw}&db=${db}&layer=${layer}&page=${page}&size=20`);
-    if (d.error){ $('tb').innerHTML = `<tr><td colspan="8" class="empty">${d.error}</td></tr>`; return; }
-    total = d.total; $('totalLabelD').textContent = `共 ${total} 张表`;
-    $('pageLabel').textContent = `第 ${d.page} / ${Math.max(1, Math.ceil(total/d.size))} 页`;
-    $('prevBtn').disabled = page <= 1;
-    $('nextBtn').disabled = page * d.size >= total;
-    $('tb').innerHTML = d.items.map(i => `<tr>
-      <td><a class="ds" href="/lineage?node=${encodeURIComponent(i.db + '.' + i.table)}">${esc(i.db)}.${esc(i.table)}</a></td>
-      <td>${i.type === 'BASE TABLE' ? '物理表' : '视图'}</td>
-      <td>${esc(i.engine)}</td>
-      <td>${i.rows ?? '-'}</td>
-      <td>${fmtSize(i.size)}</td>
-      <td>${esc(i.ctime)}</td>
-      <td>${esc(i.utime)}</td>
-      <td><span class="badge">${esc(i.layer)}</span></td>
-      <td title="${esc(i.comment)}">${esc(trim(i.comment, 40))}</td>
     </tr>`).join('');
   }
 }
@@ -198,23 +304,13 @@ async function loadChanges(){
   </li>`).join('');
 }
 
-function switchView(v){
-  view = v; page = 1;
-  $('filtersDs').style.display = v === 'dataset' ? '' : 'none';
-  $('filtersDoris').style.display = v === 'doris' ? '' : 'none';
-  $('thDs').style.display = v === 'dataset' ? '' : 'none';
-  $('thDoris').style.display = v === 'doris' ? '' : 'none';
-  loadList();
-}
-
 $('searchBtn').onclick = () => { page = 1; loadList(); };
-$('searchBtnD').onclick = () => { page = 1; loadList(); };
 $('kw').addEventListener('keydown', e => { if (e.key === 'Enter'){ page = 1; loadList(); }});
-$('kwD').addEventListener('keydown', e => { if (e.key === 'Enter'){ page = 1; loadList(); }});
 $('prevBtn').onclick = () => { if (page > 1){ page--; loadList(); } };
 $('nextBtn').onclick = () => { if (page * 20 < total){ page++; loadList(); } };
 
-loadStats(); loadTypes(); loadLayers(); loadList(); loadChanges();
+setTh(mode);
+loadStats(); loadTrees(); loadList(); loadChanges();
 </script>
 </body>
 </html>
