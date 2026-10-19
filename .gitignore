@@ -69,3 +69,6 @@ zamloan_健康度分析/
 .idea/
 Thumbs.db
 Desktop.ini
+
+# 本地探索/验证产物归档(不入库)
+archive/
