@@ -187,6 +187,21 @@ def api_dataset_detail(dsid: int):
         # 上游表(闭包)
         up = d.exec("SELECT up_db, up_table, hop_depth FROM etl.dwd_datawind_lineage_closure_t_d WHERE dt=%s AND dataset_id=%s ORDER BY up_db, up_table", (dt, dsid), fetch=True)
         info["upstream_tables"] = [{"db": r[0], "table": r[1], "hop": r[2]} for r in up]
+        # 血缘树(树状分层): 数据集 <- hop1 直接上游 <- hop2 DS调度生产来源(ods_ds_lineage_s_d 补全)
+        #   WHERE 不嵌套子查询: hop2 逐表查询
+        tree_ups = []
+        for r in up:
+            up_db, up_tb = r[0], r[1]
+            srcs = []
+            if up_db and up_tb:
+                src_rows = d.exec(
+                    "SELECT src_db, src_table FROM etl.ods_ds_lineage_s_d "
+                    "WHERE dt=%s AND dst_db=%s AND dst_table=%s ORDER BY src_db, src_table LIMIT 12",
+                    (dt, up_db, up_tb), fetch=True)
+                srcs = [{"db": x[0], "table": x[1]} for x in src_rows]
+            tree_ups.append({"db": up_db, "table": up_tb, "hop": r[2], "srcs": srcs})
+        info["lineage_tree"] = {"dataset_id": dsid, "name": info.get("name", ""),
+                                "upstream": tree_ups}
         # 字段级血缘(该数据集 target_field -> src)
         fc = d.exec("SELECT target_field, src_table, src_field, confidence FROM etl.dwd_datawind_column_lineage_t_d WHERE dt=%s AND dataset_id=%s ORDER BY target_field", (dt, dsid), fetch=True)
         info["field_lineage"] = [{"target": r[0], "src_table": r[1] or "", "src_field": r[2] or "", "conf": r[3]} for r in fc]

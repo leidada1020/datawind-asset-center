@@ -5,7 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>数据集详情 - DataWind 资产中心</title>
 <style>
-:root{--main:#1a6d8a;--bg:#f5f7fa;--card:#fff;--line:#e2e8f0;--text:#1f2329;--sub:#646a73;--accent:#d97706;}
+:root{--main:#1a6d8a;--bg:#f5f7fa;--card:#fff;--line:#e2e8f0;--text:#1f2329;--sub:#646a73;--accent:#d97706;
+  --c-mv:#2b6cb0;--c-ods:#2f855a;--c-dwd:#805ad5;--c-dim:#319795;--c-dws:#c05621;--c-ads:#c53030;
+  --c-tmp:#718096;--c-fin:#234e70;--c-other:#8a7b60;--c-dataset:#1a6d8a;}
 *{box-sizing:border-box;margin:0;padding:0;}
 body{font-family:"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);}
 header{background:#fff;border-bottom:1px solid var(--line);padding:12px 24px;display:flex;align-items:center;gap:24px;}
@@ -27,11 +29,13 @@ pre{background:#0f172a;color:#e2e8f0;padding:14px;border-radius:8px;font-size:12
 .kv{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;font-size:13px;}
 .kv .k{color:var(--sub);font-size:12px;}
 .kv .v{font-weight:500;word-break:break-all;}
-.hops{display:flex;gap:14px;flex-wrap:wrap;align-items:center;font-size:13px;}
-.node{background:#e8f0f4;border:1px solid #c6d8e2;border-radius:6px;padding:8px 12px;}
-.node.ds{background:#fdf0e3;border-color:#e5c9a5;}
-.node .db{color:var(--sub);font-size:11px;}
-svg{width:100%;height:auto;}
+#lineage-svg-wrap{overflow-x:auto;}
+#lineage-svg-wrap svg{width:100%;height:auto;min-width:760px;}
+.legend{display:flex;gap:12px;flex-wrap:wrap;align-items:center;font-size:12px;color:var(--sub);margin-bottom:10px;}
+.legend .item{display:flex;align-items:center;gap:5px;}
+.legend .dot{width:12px;height:12px;border-radius:3px;display:inline-block;}
+.legend .dot.round{border-radius:50%;}
+.tips{font-size:12px;color:var(--sub);}
 .changes li{list-style:none;padding:8px 0;border-bottom:1px dashed var(--line);font-size:13px;}
 .changes .t{display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px;margin-right:8px;background:#e8f0f4;color:var(--main);}
 .changes .t.added{background:#e6f4ea;color:#1a7f37;}
@@ -54,42 +58,116 @@ a{color:var(--main);text-decoration:none;} a:hover{text-decoration:underline;}
 <script>
 const $ = id => document.getElementById(id);
 const dsid = parseInt(location.pathname.split('/')[2]);
+const LAYER_COLOR = {mv:'#2b6cb0',ods:'#2f855a',dwd:'#805ad5',dim:'#319795',dws:'#c05621',ads:'#c53030',tmp:'#718096',fin:'#234e70',other:'#8a7b60'};
+const DCOLOR = '#d97706';
 function esc(s){ return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
-
 async function j(url){ const r = await fetch(url); return r.json(); }
+
+/* ---------------- 树状血缘图: 数据集(右) <- hop1直接上游(中) <- hop2调度生产来源(左) ---------------- */
+function renderLineageTree(t){
+  const ups = (t && t.upstream) || [];
+  if (!ups.length) return '<div class="empty">该数据集无解析到的上游表（直连/无加工SQL）</div>';
+  // 列定义: 2=调度来源(hop2), 1=直接上游(hop1), 0=数据集
+  const colCx = {2:180, 1:500, 0:830}, colW = {2:280, 1:280, 0:220};
+  const NODE_H = 30, DS_H = 52, TOP = 34, PAD = 60, YMIN = 58, W = 960;
+  const layerOf = db => LAYER_COLOR[db] || LAYER_COLOR.other;
+  const nodeW = tb => Math.max(110, Math.min(250, (tb || '').length * 7.2 + 22));
+
+  // hop1 节点集合 + hop2 节点集合(去重)
+  const hop1 = ups.map(u => ({db: u.db || '', table: u.table, srcs: u.srcs || []}));
+  const hop2Map = {};
+  hop1.forEach(u => (u.srcs || []).forEach(s => {
+    const k = (s.db || '') + '\u0001' + (s.table || '');
+    if (!(k in hop2Map)) hop2Map[k] = {db: s.db || '', table: s.table || '', parents: []};
+    hop2Map[k].parents.push(u);
+  }));
+  const hop2 = Object.values(hop2Map);
+
+  // 布局: 列内垂直均分
+  const colH = {2: hop2.length * YMIN, 1: hop1.length * YMIN, 0: 1 * YMIN};
+  const H = Math.max(colH[2], colH[1], colH[0]) + TOP + PAD;
+  const pos = {};
+  function placeCol(layer, arr, h){
+    arr.forEach((nd, i) => {
+      pos[layer + ':' + i] = { x: colCx[layer], y: TOP + (h - arr.length * YMIN) / 2 + i * YMIN + (layer === 0 ? DS_H / 2 : NODE_H / 2) };
+    });
+  }
+  placeCol(2, hop2, colH[2]); placeCol(1, hop1, colH[1]); placeCol(0, [{name: t.name}], colH[0]);
+
+  let svg = '';
+  svg += '<svg viewBox="0 0 ' + W + ' ' + H + '" xmlns="http://www.w3.org/2000/svg">';
+  svg += '<defs><marker id="arr" viewBox="0 0 10 10" refX="15" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/></marker></defs>';
+
+  // 层带 + 层标签
+  [['2', '#eef4fb', '↑ 调度生产来源 (hop2)'], ['1', '#f3fbf5', '↑ 直接上游 (hop1)'], ['0', '#fff7e8', '★ 数据集']].forEach(([k, color, label]) => {
+    const x0 = colCx[k] - colW[k] / 2;
+    svg += '<rect x="' + x0 + '" y="8" width="' + colW[k] + '" height="' + (H - 16) + '" rx="10" fill="' + color + '" opacity="0.5"/>';
+    svg += '<text x="' + colCx[k] + '" y="' + (H - 20) + '" text-anchor="middle" font-size="11.5" font-weight="600" fill="#64748b">' + label + '</text>';
+  });
+
+  // 边: hop2 -> hop1 -> 数据集 (数据流向从左到右)
+  hop2.forEach((nd, i) => {
+    const a = pos['2:' + i];
+    nd.parents.forEach(p => {
+      const pi = hop1.findIndex(x => x === p);
+      const b = pos['1:' + pi];
+      const x1 = a.x + nodeW(nd.table) / 2, y1 = a.y;
+      const x2 = b.x - nodeW(p.table) / 2, y2 = b.y;
+      const dx = Math.max(36, (x2 - x1) * 0.5);
+      svg += '<path d="M ' + x1 + ' ' + y1 + ' C ' + (x1 + dx) + ' ' + y1 + ', ' + (x2 - dx) + ' ' + y2 + ', ' + x2 + ' ' + y2 + '" fill="none" stroke="#94a3b8" stroke-width="1.2" marker-end="url(#arr)"/>';
+    });
+  });
+  hop1.forEach((nd, i) => {
+    const a = pos['1:' + i], b = pos['0:0'];
+    const x1 = a.x + nodeW(nd.table) / 2, y1 = a.y;
+    const x2 = b.x - 110, y2 = b.y;
+    const dx = Math.max(30, (x2 - x1) * 0.5);
+    svg += '<path d="M ' + x1 + ' ' + y1 + ' C ' + (x1 + dx) + ' ' + y1 + ', ' + (x2 - dx) + ' ' + y2 + ', ' + x2 + ' ' + y2 + '" fill="none" stroke="#94a3b8" stroke-width="1.2" marker-end="url(#arr)"/>';
+  });
+
+  // 节点: hop2
+  hop2.forEach((nd, i) => {
+    const p = pos['2:' + i], c = layerOf(nd.db), w = nodeW(nd.table);
+    const disp = nd.table.length > 24 ? nd.table.slice(0, 24) + '…' : nd.table;
+    svg += '<g class="lnode" data-q="' + esc(nd.db) + '.' + esc(nd.table) + '" style="cursor:pointer">' +
+      '<rect x="' + (p.x - w / 2) + '" y="' + (p.y - NODE_H / 2) + '" width="' + w + '" height="' + NODE_H + '" rx="6" fill="' + c + '" fill-opacity="0.12" stroke="' + c + '" stroke-width="1.3"/>' +
+      '<text x="' + p.x + '" y="' + (p.y + 4) + '" text-anchor="middle" font-size="11" fill="' + c + '" font-weight="600">' + esc(disp) + '</text>' +
+      '<title>' + esc(nd.db) + '.' + esc(nd.table) + '（hop2 调度生产来源）</title></g>';
+  });
+  // 节点: hop1
+  hop1.forEach((nd, i) => {
+    const p = pos['1:' + i], c = layerOf(nd.db), w = nodeW(nd.table);
+    const disp = nd.table.length > 24 ? nd.table.slice(0, 24) + '…' : nd.table;
+    svg += '<g class="lnode" data-q="' + esc(nd.db) + '.' + esc(nd.table) + '" style="cursor:pointer">' +
+      '<rect x="' + (p.x - w / 2) + '" y="' + (p.y - NODE_H / 2) + '" width="' + w + '" height="' + NODE_H + '" rx="6" fill="' + c + '" fill-opacity="0.16" stroke="' + c + '" stroke-width="1.6"/>' +
+      '<text x="' + p.x + '" y="' + (p.y + 4) + '" text-anchor="middle" font-size="11" fill="' + c + '" font-weight="600">' + esc(disp) + '</text>' +
+      '<title>' + esc(nd.db) + '.' + esc(nd.table) + '（hop1 直接上游）</title></g>';
+  });
+  // 节点: 数据集(右端, 橙色)
+  const dp = pos['0:0'];
+  const dispName = t.name.length > 10 ? t.name.slice(0, 10) + '…' : t.name;
+  svg += '<g>' +
+    '<rect x="' + (dp.x - 110) + '" y="' + (dp.y - DS_H / 2) + '" width="220" height="' + DS_H + '" rx="10" fill="' + DCOLOR + '" fill-opacity="0.1" stroke="' + DCOLOR + '" stroke-width="2"/>' +
+    '<text x="' + dp.x + '" y="' + (dp.y + 2) + '" text-anchor="middle" font-size="12.5" font-weight="700" fill="#b45309">' + esc(dispName) + '</text>' +
+    '<text x="' + dp.x + '" y="' + (dp.y + 22) + '" text-anchor="middle" font-size="10" fill="#8a6d3b">数据集 #' + t.dataset_id + '</text></g>';
+
+  svg += '</svg>';
+  return svg;
+}
+
+$('lineage-svg-wrap') && document.addEventListener('click', ev => {
+  const g = ev.target.closest('.lnode'); if (!g) return;
+  window.open('/lineage?node=' + encodeURIComponent(g.dataset.q), '_blank');
+});
 
 async function load(){
   const d = await j('/api/datasets/' + dsid);
   if (d.error){ $('main').innerHTML = `<div class="panel empty">${esc(d.error)}</div>`; $('title').textContent = d.error; return; }
   $('title').textContent = `${esc(d.name)} (${d.dataset_id})`;
 
-  // 上游表血缘图(内联SVG): 数据集 <- 上游表
-  const ups = d.upstream_tables || [];
-  let svg = '';
-  if (ups.length){
-    const W = 900, H = 70 + Math.ceil(ups.length / 5) * 86;
-    const perRow = 5;
-    let boxes = '';
-    ups.forEach((u, i) => {
-      const col = i % perRow, row = Math.floor(i / perRow);
-      const x = 40 + col * 172, y = 20 + row * 86;
-      boxes += `<g><rect x="${x}" y="${y}" width="150" height="52" rx="6" fill="#e8f0f4" stroke="#c6d8e2"/>
-        <text x="${x+75}" y="${y+22}" text-anchor="middle" font-size="11" fill="#1a6d8a">${esc(u.table)}</text>
-        <text x="${x+75}" y="${y+40}" text-anchor="middle" font-size="10" fill="#646a73">${esc(u.db || '-')} · hop ${u.hop}</text></g>`;
-    });
-    const lastRow = Math.floor((ups.length - 1) / perRow);
-    const dsY = 20 + (lastRow + 1) * 86;
-    svg = `<svg viewBox="0 0 ${W} ${dsY + 86}" xmlns="http://www.w3.org/2000/svg">
-      ${boxes}
-      <g><rect x="360" y="${dsY}" width="180" height="60" rx="8" fill="#fdf0e3" stroke="#e5c9a5"/>
-        <text x="450" y="${dsY+24}" text-anchor="middle" font-size="12" font-weight="600" fill="#b45309">${esc(d.name)}</text>
-        <text x="450" y="${dsY+44}" text-anchor="middle" font-size="10" fill="#646a73">数据集 ${d.dataset_id}</text></g>
-      <text x="30" y="${dsY-16}" font-size="12" fill="#646a73">${ups.length} 个上游来源表</text>
-      <text x="${W-200}" y="${dsY+76}" font-size="10" fill="#94a3b8">表级血缘（hop=1, 闭包预计算）</text>
-    </svg>`;
-  } else {
-    svg = `<div class="empty">该数据集无解析到的上游表（直连/无加工SQL）</div>`;
-  }
+  // 树状表级血缘(hop1 + DS调度生产来源 hop2)
+  const treeSvg = renderLineageTree(d.lineage_tree);
+  const hop2Cnt = ((d.lineage_tree || {}).upstream || []).reduce((a, u) => a + ((u.srcs || []).length), 0);
 
   // 字段级血缘表
   const fl = d.field_lineage || [];
@@ -121,7 +199,20 @@ async function load(){
         ${kv('连接模式', d.connection_mode)}${kv('密级', d.confidentiality)}
       </div>
     </div>
-    <div class="panel"><h2>表级血缘（上游来源）</h2>${svg}</div>
+    <div class="panel"><h2>表级血缘（上下游依赖）</h2>
+      <div class="legend">
+        <span>节点分层:</span>
+        <span class="item"><span class="dot" style="background:#2b6cb0"></span>mv</span>
+        <span class="item"><span class="dot" style="background:#2f855a"></span>ods</span>
+        <span class="item"><span class="dot" style="background:#805ad5"></span>dwd</span>
+        <span class="item"><span class="dot" style="background:#319795"></span>dim</span>
+        <span class="item"><span class="dot" style="background:#c05621"></span>dws</span>
+        <span class="item"><span class="dot" style="background:#c53030"></span>ads</span>
+        <span class="item"><span class="dot round" style="background:#d97706"></span>数据集</span>
+        <span class="tips" style="margin-left:auto">点击表节点可查看完整血缘 →</span>
+      </div>
+      <div id="lineage-svg-wrap">${treeSvg}</div>
+    </div>
     <div class="panel"><h2>字段级血缘（${fl.length} 条）</h2>
       <div style="overflow-x:auto;"><table><thead><tr><th>目标字段</th><th>来源表</th><th>来源字段</th><th>置信度</th></tr></thead>
       <tbody>${flRows}</tbody></table></div>
