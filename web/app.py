@@ -141,7 +141,8 @@ def api_datasets(keyword: str = "", folder: str = "", type_code: str = "",
         off = (page - 1) * size
         rows = d.exec(
             "SELECT dataset_id, name, folder_path, type_name, frequency, schedule_time, "
-            "status, rows_cnt, last_success_task_time, mtime, source_tables "
+            "status, rows_cnt, last_success_task_time, mtime, source_tables, "
+            "data_source_type, data_source_id, cluster_name, source_db "
             "FROM etl.ods_datawind_dataset_s_d WHERE %s ORDER BY dataset_id LIMIT %s OFFSET %s"
             % (w, size, off), args, fetch=True)
         items = []
@@ -153,6 +154,8 @@ def api_datasets(keyword: str = "", folder: str = "", type_code: str = "",
                 "status": r[6], "rows_cnt": r[7], "last_sync": str(r[8]) if r[8] else "",
                 "mtime": str(r[9]) if r[9] else "",
                 "source_tables": (r[10] or "")[:200],
+                "data_source_type": r[11] or "", "data_source_id": r[12],
+                "cluster_name": r[13] or "", "source_db": r[14] or "",
             })
         return {"total": cnt, "page": page, "size": size, "items": items}
     finally:

@@ -43,7 +43,12 @@ CREATE TABLE IF NOT EXISTS etl.ods_datawind_dataset_s_d (
     hsql_used               TINYINT        COMMENT '是否使用HSQL加工: 0=否 1=是',
     url                     VARCHAR(512)   COMMENT '数据集控制台URL(可直接跳转详情页)',
     ctime                   DATETIME       COMMENT '数据集创建时间',
-    mtime                   DATETIME       COMMENT '数据集元数据最后修改时间(变更检测重要信号)'
+    mtime                   DATETIME       COMMENT '数据集元数据最后修改时间(变更检测重要信号)',
+    -- 2026-10-20 新增: 数据集数据源信息(getDataModelInfo nodeConf首节点)
+    data_source_type        VARCHAR(32)    COMMENT '数据源类型: doris/mysql/hive/kafka/lark_sheet等',
+    data_source_id          BIGINT         COMMENT '数据源ID(DataWind侧数据源连接: 10124860=Doris 10136098=Doris_非洲)',
+    cluster_name            VARCHAR(64)    COMMENT '数据源集群名(区分多实例: Doris / Doris_非洲)',
+    source_db               VARCHAR(128)   COMMENT '数据源库名(直连节点可能为虚拟名Doris-db-0, prep节点为真实库名如fin/ads/dws)'
 ) ENGINE=OLAP
 UNIQUE KEY(dt, dataset_id)
 COMMENT 'DataWind数据集每日快照(s_d): 每日全量写入, dt分区+etl_time; 重跑先删当日分区再全量; 变更识别=今天vs昨天分区自比对'

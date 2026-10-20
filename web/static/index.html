@@ -113,7 +113,7 @@ a.ds:hover{text-decoration:underline;}
       <div style="overflow-x:auto;">
         <table>
           <thead id="th"><tr><th>ID / 库.表</th><th>名称 / 表名</th><th>目录 / 分层</th><th>类型</th><th>调度 / 行数</th><th>状态 / 大小</th><th>上次同步 / 最近更新</th><th>来源表 / 注释</th></tr></thead>
-          <tbody id="tb"><tr><td colspan="9" class="loading" style="padding:24px"><span class="spin"></span>正在加载资产列表...</td></tr></tbody>
+          <tbody id="tb"><tr><td colspan="10" class="loading" style="padding:24px"><span class="spin"></span>正在加载资产列表...</td></tr></tbody>
         </table>
       </div>
       <div class="pager">
@@ -265,14 +265,14 @@ function renderCrumb(){
 function setTh(m){
   $('th').innerHTML = m === 'layer'
     ? '<tr><th>库.表</th><th>表名</th><th>分层</th><th>类型</th><th>引擎</th><th>行数</th><th>数据量</th><th>最近更新</th><th>注释</th></tr>'
-    : '<tr><th>ID</th><th>名称</th><th>文件夹</th><th>类型</th><th>调度</th><th>状态</th><th>行数</th><th>上次同步</th><th>来源表</th></tr>';
+    : '<tr><th>ID</th><th>名称</th><th>文件夹</th><th>类型</th><th>调度</th><th>状态</th><th>行数</th><th>上次同步</th><th>数据源</th><th>来源表</th></tr>';
 }
 
 async function loadList(){
   const kw = encodeURIComponent($('kw').value.trim());
   const btn = $('searchBtn');
   btn.disabled = true;
-  $('tb').innerHTML = '<tr><td colspan="9" class="loading" style="padding:24px"><span class="spin"></span>正在加载资产列表...</td></tr>';
+  $('tb').innerHTML = '<tr><td colspan="10" class="loading" style="padding:24px"><span class="spin"></span>正在加载资产列表...</td></tr>';
   try {
   if (mode === 'layer'){
     const q = `/api/doris/tables?keyword=${kw}&layer=${encodeURIComponent(layerSel)}&db=${encodeURIComponent(dbSel)}&page=${page}&size=20`;
@@ -310,11 +310,12 @@ async function loadList(){
       <td>${i.status === 1 ? '正常' : i.status === 2 ? '删除' : i.status === 3 ? '回收站' : esc(String(i.status))}</td>
       <td>${i.rows_cnt ?? '-'}</td>
       <td>${esc(i.last_sync)}</td>
+      <td>${i.data_source_type ? `${esc(i.data_source_type)}${i.cluster_name && i.cluster_name !== 'Doris' ? '<span class="badge">' + esc(i.cluster_name) + '</span>' : ''}` : '-'}</td>
       <td title="${esc(i.source_tables)}">${esc(trim(i.source_tables, 40))}</td>
-    </tr>`).join('') || '<tr><td colspan="9" class="empty">无匹配数据集</td></tr>';
+    </tr>`).join('') || '<tr><td colspan="10" class="empty">无匹配数据集</td></tr>';
   }
   } catch (e) {
-    $('tb').innerHTML = `<tr><td colspan="9">${errHtml(e.message)}</td></tr>`;
+    $('tb').innerHTML = `<tr><td colspan="10">${errHtml(e.message)}</td></tr>`;
   } finally { btn.disabled = false; }
 }
 

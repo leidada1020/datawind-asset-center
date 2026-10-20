@@ -118,7 +118,8 @@ class DataWindClient:
         return r.get("data") or {}
 
     def model_logic(self, dsid):
-        """加工逻辑: (sql, source_tables, field_list)"""
+        """加工逻辑: (sql, source_tables, field_list, data_source)
+        data_source: 首节点数据源 {type, id, cluster, db}（区分多 Doris/多源）"""
         r = self.http_json(
             "/api/v3/open/openDataFactory/getDataModelInfo?dataSetId=%d" % dsid,
             timeout=120)
@@ -127,9 +128,18 @@ class DataWindClient:
         if not isinstance(nc, list):
             nc = [nc]
         sql_parts, srcs, fields = [], [], []
+        data_source = None
         for node in nc:
             if not isinstance(node, dict):
                 continue
+            if data_source is None:
+                ds_type = node.get("dataSourceType") or ""
+                ds_id = node.get("dataSourceId")
+                if ds_type:
+                    data_source = {"type": ds_type,
+                                   "id": ds_id,
+                                   "cluster": node.get("clusterName") or "",
+                                   "db": node.get("displayDbName") or node.get("dbName") or ""}
             q = node.get("query")
             if q:
                 sql_parts.append(str(q))
@@ -145,7 +155,8 @@ class DataWindClient:
                                    "type": f.get("prepType") or f.get("type")})
         return ("\n;\n".join(sql_parts),
                 ", ".join(sorted(set(srcs))),
-                json.dumps(fields, ensure_ascii=False))
+                json.dumps(fields, ensure_ascii=False),
+                data_source)
 
     # ---------- 并发批量 ----------
     def batch_fetch(self, ids, fetch_fn, max_workers=8):

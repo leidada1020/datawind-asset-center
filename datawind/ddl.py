@@ -42,7 +42,11 @@ CREATE TABLE IF NOT EXISTS {db}.ods_datawind_dataset_s_d (
     mtime                   DATETIME     COMMENT '数据集元数据最后修改时间(变更检测重要信号)',
     sql_logic               TEXT         COMMENT '加工SQL逻辑(来自getDataModelInfo, 直连/上传类为空)',
     source_tables           TEXT         COMMENT '来源表列表(加工节点sourceTableList, 逗号分隔)',
-    field_list              TEXT         COMMENT '字段清单JSON(name|dsColumnNames业务名|type)'
+    field_list              TEXT         COMMENT '字段清单JSON(name|dsColumnNames业务名|type)',
+    data_source_type        VARCHAR(32)  COMMENT '数据源类型(getDataModelInfo nodeConf首节点): doris/mysql/hive/kafka/lark_sheet等',
+    data_source_id          BIGINT       COMMENT '数据源ID(DataWind侧数据源连接, 如 10124860=Doris 10136098=Doris_非洲)',
+    cluster_name            VARCHAR(64)  COMMENT '数据源集群名(区分多实例, 如 Doris / Doris_非洲)',
+    source_db               VARCHAR(128) COMMENT '数据源库名(部分直连节点为虚拟名如Doris-db-0, prep节点为真实库名)'
 ) ENGINE=OLAP
 UNIQUE KEY(dt, dataset_id)
 COMMENT 'DataWind数据集每日快照(s_d): 每日全量写入, dt分区+etl_time; 重跑先删当日分区再全量; 变更识别=今天vs昨天分区自比对'

@@ -249,9 +249,16 @@ def main():
         d["confidentiality"] = inf.get("confidentiality") or ""
         mdl = model_map.get(i)
         if mdl:
-            d["sql_logic"], d["source_tables"], d["field_list"] = mdl
+            d["sql_logic"], d["source_tables"], d["field_list"], ds_src = mdl
         else:
-            d["sql_logic"], d["source_tables"], d["field_list"] = None, None, None
+            d["sql_logic"], d["source_tables"], d["field_list"], ds_src = None, None, None, None
+        if ds_src:
+            d["data_source_type"] = ds_src.get("type")
+            d["data_source_id"] = ds_src.get("id")
+            d["cluster_name"] = ds_src.get("cluster")
+            d["source_db"] = ds_src.get("db")
+        else:
+            d["data_source_type"], d["data_source_id"], d["cluster_name"], d["source_db"] = None, None, None, None
 
     # 取上一个快照日期
     rows = doris.exec("SELECT MAX(dt) FROM %s WHERE dt < %%s" % TBL_SNAPSHOT.format(db=doris.db),
@@ -265,7 +272,8 @@ def main():
             "connection_mode", "sync_mode", "partition_filter", "confidentiality",
             "last_sync_time", "last_success_task_time", "rows_cnt", "elapsed_last_success",
             "upstream", "folder_id", "folder_path", "is_hive_table", "is_hive_partition",
-            "hsql_used", "url", "ctime", "mtime", "sql_logic", "source_tables", "field_list"]
+            "hsql_used", "url", "ctime", "mtime", "sql_logic", "source_tables", "field_list",
+            "data_source_type", "data_source_id", "cluster_name", "source_db"]
     ph = ",".join(["%s"] * len(cols))
     sql = "INSERT INTO %s (%s) VALUES (%s)" % (TBL_SNAPSHOT.format(db=doris.db), ",".join(cols), ph)
     rows_all = []

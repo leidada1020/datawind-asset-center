@@ -231,7 +231,7 @@ def sync_lineage_incremental(client, doris, sync_map, logger):
             continue
         try:
             try:
-                sql, srcs, field_list = client.model_logic(dsid_int)
+                sql, srcs, field_list, ds_src = client.model_logic(dsid_int)
             except Exception as e:
                 logger.warning("血缘增量同步[%s] 拉取加工SQL失败: %s", dsid, e)
                 continue
@@ -281,15 +281,19 @@ def sync_lineage_incremental(client, doris, sync_map, logger):
         except Exception as e:
             logger.error("血缘增量同步[%s] 落库失败: %s (该数据集血缘待下次轮询/每日全量纠正)", dsid, e)
             continue
-        # 快照准实时: 更新当日分区加工SQL/来源表/字段清单(详情页加工SQL 5分钟内刷新)
+        # 快照准实时: 更新当日分区加工SQL/来源表/字段清单/数据源(详情页加工SQL 5分钟内刷新)
         try:
+            ds_t, ds_id, ds_cl, ds_db = (ds_src or {}).get("type"), (ds_src or {}).get("id"), \
+                (ds_src or {}).get("cluster"), (ds_src or {}).get("db")
             doris.exec(
                 "UPDATE %s SET sql_logic=%%s, source_tables=%%s, field_list=%%s, "
+                "data_source_type=%%s, data_source_id=%%s, cluster_name=%%s, source_db=%%s, "
                 "mtime=%%s, etl_time=%%s WHERE dt=%%s AND dataset_id=%%s"
                 % TBL_SNAPSHOT.format(db=doris.db),
                 (sql or "", srcs or "", field_list or "",
+                 ds_t or "", ds_id, ds_cl or "", ds_db or "",
                  (meta or {}).get("mtime") or "", etl_time, dt, dsid_int))
-            logger.info("快照准实时[%s] 更新加工SQL/来源表/字段清单", dsid)
+            logger.info("快照准实时[%s] 更新加工SQL/来源表/字段清单/数据源", dsid)
         except Exception as e:
             logger.warning("快照准实时[%s] 更新失败(当日分区可能未建, 每日全量兜底): %s", dsid, e)
     logger.info("血缘增量同步汇总: %d/%d 数据集 (dt=%s)", synced, len(sync_map), dt)

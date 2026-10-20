@@ -213,6 +213,8 @@ async function load(){
         ${kv('状态', d.status)}${kv('行数(上次成功)', d.rows_cnt)}${kv('上次同步', d.last_success_task_time)}
         ${kv('创建时间', d.ctime)}${kv('修改时间', d.mtime)}${kv('同步方式', d.sync_type)}
         ${kv('连接模式', d.connection_mode)}${kv('密级', d.confidentiality)}
+        ${d.data_source_type ? kv('数据源', `${d.data_source_type}${d.cluster_name ? ' · ' + d.cluster_name : ''}${d.data_source_id ? ' (ID ' + d.data_source_id + ')' : ''}`) : ''}
+        ${d.source_db ? kv('数据源库', d.source_db) : ''}
       </div>
     </div>
     <div class="panel"><h2>表级血缘（上下游依赖）</h2>
