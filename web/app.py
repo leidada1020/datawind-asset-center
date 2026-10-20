@@ -119,6 +119,7 @@ def api_folder_tree():
 # ---------------- 资产目录 ----------------
 @app.get("/api/datasets")
 def api_datasets(keyword: str = "", folder: str = "", type_code: str = "",
+                 status: str = "", source: str = "", freq: str = "",
                  page: int = Query(1, ge=1), size: int = Query(20, ge=1, le=100)):
     d = get_doris()
     try:
@@ -136,6 +137,15 @@ def api_datasets(keyword: str = "", folder: str = "", type_code: str = "",
         if type_code:
             where.append("type_code = %s")
             args.append(type_code)
+        if status:
+            where.append("status = %s")
+            args.append(status)
+        if source:
+            where.append("(data_source_type = %s OR cluster_name = %s)")
+            args += [source, source]
+        if freq:
+            where.append("frequency = %s")
+            args.append(freq)
         w = " AND ".join(where)
         cnt = d.exec("SELECT COUNT(*) FROM etl.ods_datawind_dataset_s_d WHERE %s" % w, args, fetch=True)[0][0]
         off = (page - 1) * size
@@ -473,7 +483,8 @@ def api_search_suggest(kw: str = Query(..., min_length=1), limit: int = Query(8,
 
 # ---------------- 变更监控 ----------------
 @app.get("/api/changes")
-def api_changes(date: str = "", ctype: str = "", keyword: str = "",
+def api_changes(date: str = "", date_from: str = "", date_to: str = "",
+                ctype: str = "", keyword: str = "", fields: str = "", source: str = "",
                 page: int = Query(1, ge=1), size: int = Query(50, ge=1, le=200)):
     d = get_doris()
     try:
@@ -482,12 +493,26 @@ def api_changes(date: str = "", ctype: str = "", keyword: str = "",
         if date:
             where.append("dt = %s")
             args.append(date)
+        if date_from:
+            where.append("dt >= %s")
+            args.append(date_from)
+        if date_to:
+            where.append("dt <= %s")
+            args.append(date_to)
         if ctype:
             where.append("change_type = %s")
             args.append(ctype)
         if keyword:
             where.append("(dataset_name LIKE %s OR dataset_id LIKE %s)")
             args += ["%%%s%%" % keyword, "%%%s%%" % keyword]
+        if fields:
+            where.append("changed_fields LIKE %s")
+            args.append("%%%s%%" % fields)
+        if source == "daily":
+            where.append("(remark IS NULL OR remark = '')")
+        elif source == "poll":
+            where.append("remark LIKE %s")
+            args.append("%%轮询%%")
         w = " AND ".join(where)
         cnt = d.exec("SELECT COUNT(*) FROM etl.dwd_datawind_dataset_change_i_d WHERE %s" % w, args, fetch=True)[0][0]
         off = (page - 1) * size

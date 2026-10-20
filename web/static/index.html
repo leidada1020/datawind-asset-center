@@ -50,7 +50,7 @@ a.ds:hover{text-decoration:underline;}
 .pager button{border:1px solid var(--line);background:#fff;border-radius:6px;padding:5px 12px;cursor:pointer;}
 .pager button:disabled{opacity:.4;cursor:default;}
 .changes li{list-style:none;padding:8px 0;border-bottom:1px dashed var(--line);font-size:13px;}
-.changes .t{display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px;margin-right:8px;background:#e8f0f4;color:var(--main);}
+.changes .t{display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px;background:#f0f4f7;color:#475569;}
 .changes .t.added{background:#e6f4ea;color:#1a7f37;}
 .changes .t.deleted{background:#fde8e8;color:#c0392b;}
 .changes .t.config_changed{background:#fdf0e3;color:#b45309;}
@@ -106,6 +106,24 @@ a.ds:hover{text-decoration:underline;}
       <div class="filters">
         <span class="crumb" id="crumb"></span>
         <input id="kw" placeholder="搜索名称/ID/表名">
+        <select id="dsType" style="display:none;border:1px solid var(--line);border-radius:6px;padding:7px 10px;background:#fff;">
+          <option value="">全部类型</option><option value="22">prep 数据集</option>
+          <option value="32">直连数据集</option><option value="100">ClickHouse CDW</option>
+        </select>
+        <select id="dsStatus" style="display:none;border:1px solid var(--line);border-radius:6px;padding:7px 10px;background:#fff;">
+          <option value="">全部状态</option><option value="0">正常</option>
+          <option value="1">彻底删除</option><option value="2">回收站</option>
+        </select>
+        <select id="dsSource" style="display:none;border:1px solid var(--line);border-radius:6px;padding:7px 10px;background:#fff;">
+          <option value="">全部数据源</option><option value="doris">Doris</option>
+          <option value="Doris_非洲">Doris_非洲</option><option value="mysql">MySQL</option>
+          <option value="bytehouse_cdw_engine">ByteHouse</option><option value="lark_sheet">Lark Sheet</option>
+          <option value="cdw_excel">CDW Excel</option><option value="cdw_csv">CDW CSV</option>
+        </select>
+        <select id="dsFreq" style="display:none;border:1px solid var(--line);border-radius:6px;padding:7px 10px;background:#fff;">
+          <option value="">全部调度</option><option value="daily">按天</option>
+          <option value="hourly">按小时</option><option value="every_ten_minutes">每10分钟</option>
+        </select>
         <button id="searchBtn" style="border:1px solid var(--line);background:#fff;border-radius:6px;padding:7px 16px;cursor:pointer;">查询</button>
         <span style="margin-left:auto;font-size:13px;color:var(--sub);" id="totalLabel"></span>
       </div>
@@ -242,6 +260,9 @@ function switchMode(m){
   $('mLayer').classList.toggle('active', m === 'layer');
   $('mFolder').classList.toggle('active', m === 'folder');
   $('kw').value = ''; page = 1;
+  // 数据集目录模式显示数据集筛选(类型/状态/数据源/调度)
+  for (const id of ['dsType','dsStatus','dsSource','dsFreq'])
+    $(id).style.display = m === 'folder' ? '' : 'none';
   setTh(m); renderTree(); renderCrumb(); loadList();
 }
 
@@ -293,7 +314,10 @@ async function loadList(){
       <td title="${esc(i.comment)}">${esc(trim(i.comment, 40))}</td>
     </tr>`).join('') || '<tr><td colspan="9" class="empty">无匹配表</td></tr>';
   } else {
-    const q = `/api/datasets?keyword=${kw}&folder=${encodeURIComponent(folderSel)}&page=${page}&size=20`;
+    const q = `/api/datasets?keyword=${kw}&folder=${encodeURIComponent(folderSel)}`
+      + `&type_code=${encodeURIComponent($('dsType').value)}&status=${encodeURIComponent($('dsStatus').value)}`
+      + `&source=${encodeURIComponent($('dsSource').value)}&freq=${encodeURIComponent($('dsFreq').value)}`
+      + `&page=${page}&size=20`;
     const d = await j(q);
     if (d.error) throw new Error(d.error);
     total = d.total; $('totalLabel').textContent = `共 ${total} 个数据集`;
@@ -336,6 +360,8 @@ async function loadChanges(){
 
 $('searchBtn').onclick = () => { page = 1; loadList(); };
 $('kw').addEventListener('keydown', e => { if (e.key === 'Enter'){ page = 1; loadList(); }});
+for (const id of ['dsType','dsStatus','dsSource','dsFreq'])
+  $(id).addEventListener('change', () => { page = 1; loadList(); });
 $('prevBtn').onclick = () => { if (page > 1){ page--; loadList(); } };
 $('nextBtn').onclick = () => { if (page * 20 < total){ page++; loadList(); } };
 
