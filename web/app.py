@@ -33,6 +33,16 @@ STATIC = os.path.join(BASE, "static")
 app = FastAPI(title="DataWind 资产中心", version="0.1.0")
 
 
+@app.middleware("http")
+async def no_cache_html(request, call_next):
+    """静态页/接口禁止浏览器缓存: 页面高频迭代, 避免用户看到旧版筛选/类型"""
+    resp = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.startswith(("/changes", "/dataset", "/lineage", "/static/")):
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return resp
+
+
 def get_doris():
     cfg = load_config()
     d = Doris(cfg)
