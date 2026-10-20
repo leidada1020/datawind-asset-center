@@ -191,23 +191,25 @@ def write_changes(doris, changes, logger):
         "[%s]%s" % (names.get(c, c), r) for c, _, r, _ in changes))
 
 
-def sync_lineage_incremental(client, doris, ids_to_sync, logger):
+def sync_lineage_incremental(client, doris, sync_map, logger):
     """轮询增量血缘同步（P1-3）: 对新增/mtime变化的数据集重新解析血缘
 
     语义（与每日全量一致）:
       - 先 DELETE 当日分区该数据集的血缘行(表级/字段级/闭包), 再 INSERT 最新解析结果
         (UNIQUE KEY 幂等但只覆盖同key; 若上游表集合收缩, 旧key会残留, 必须整集删除重插)
+      - 顺手将最新加工SQL/来源表/字段清单 UPDATE 进当日快照(详情页"加工SQL"准实时,
+        当日分区未建则 UPDATE 0 行, 由每日全量兜底)
       - 失败仅记日志, 不阻塞轮询主流程; 每日全量仍兜底全量重建
     返回成功同步的数据集数
     """
     from datawind.lineage import LineageParser, normalize_column_edge
-    if not ids_to_sync:
+    if not sync_map:
         return 0
     parser = LineageParser()
     dt = time.strftime("%Y-%m-%d")
     etl_time = time.strftime("%Y-%m-%d %H:%M:%S")
     synced = 0
-    for dsid in ids_to_sync:
+    for dsid, meta in sync_map.items():
         try:
             dsid_int = int(dsid)
         except (ValueError, TypeError):
@@ -215,7 +217,7 @@ def sync_lineage_incremental(client, doris, ids_to_sync, logger):
             continue
         try:
             try:
-                sql, srcs, _ = client.model_logic(dsid_int)
+                sql, srcs, field_list = client.model_logic(dsid_int)
             except Exception as e:
                 logger.warning("血缘增量同步[%s] 拉取加工SQL失败: %s", dsid, e)
                 continue
@@ -264,7 +266,19 @@ def sync_lineage_incremental(client, doris, ids_to_sync, logger):
                         dsid, len(t_rows), len(c_rows), len(cl_rows))
         except Exception as e:
             logger.error("血缘增量同步[%s] 落库失败: %s (该数据集血缘待下次轮询/每日全量纠正)", dsid, e)
-    logger.info("血缘增量同步汇总: %d/%d 数据集 (dt=%s)", synced, len(ids_to_sync), dt)
+            continue
+        # 快照准实时: 更新当日分区加工SQL/来源表/字段清单(详情页加工SQL 5分钟内刷新)
+        try:
+            doris.exec(
+                "UPDATE %s SET sql_logic=%%s, source_tables=%%s, field_list=%%s, "
+                "mtime=%%s, etl_time=%%s WHERE dt=%%s AND dataset_id=%%s"
+                % TBL_SNAPSHOT.format(db=doris.db),
+                (sql or "", srcs or "", field_list or "",
+                 (meta or {}).get("mtime") or "", etl_time, dt, dsid_int))
+            logger.info("快照准实时[%s] 更新加工SQL/来源表/字段清单", dsid)
+        except Exception as e:
+            logger.warning("快照准实时[%s] 更新失败(当日分区可能未建, 每日全量兜底): %s", dsid, e)
+    logger.info("血缘增量同步汇总: %d/%d 数据集 (dt=%s)", synced, len(sync_map), dt)
     return synced
 
 
@@ -343,10 +357,16 @@ def poll_once(client, doris, baseline, logger):
                             {"mtime": {"old": old.get("mtime"), "new": d["mtime"]}}))
     write_changes(doris, changes, logger)
     save_baseline(current)
-    # 增量血缘同步: 新增/元数据修改的数据集重新解析(重接口按需, 不阻塞主流程)
-    ids_to_sync = [rid for ct, rid, _, _ in changes if ct in ("added", "mtime_changed")]
-    if ids_to_sync:
-        sync_lineage_incremental(client, doris, ids_to_sync, logger)
+    # 增量血缘同步: 新增/元数据修改的数据集重新解析(重接口按需, 不阻塞主流程),
+    #   并顺手将最新加工SQL/来源表/字段清单更新进当日快照(详情页准实时)
+    sync_map = {}
+    for ct, rid, rname, diff in changes:
+        if ct == "added":
+            sync_map[rid] = {"mtime": (diff.get("new") or {}).get("mtime", ""), "name": rname}
+        elif ct == "mtime_changed":
+            sync_map[rid] = {"mtime": (diff.get("mtime") or {}).get("new", ""), "name": rname}
+    if sync_map:
+        sync_lineage_incremental(client, doris, sync_map, logger)
     logger.info("轮询完成: 数据集=%d, 变更=%d (基线已更新)", len(current), len(changes))
     return len(changes)
 
