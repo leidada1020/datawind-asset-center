@@ -50,7 +50,8 @@ MAX_CONSEC_FAIL = 5      # 连续失败 N 次进入熔断
 COOLDOWN_SEC = 1800      # 熔断休息 30 分钟
 
 # 每日全量调度（应用内自触发, 不依赖 cron/systemd）
-DAILY_HOUR_UTC = 10      # 每日 UTC 10:30 触发 run_daily（部署机 UTC 时区）
+DAILY_HOUR_UTC = 0      # 每日 UTC 00:01 触发 run_daily（部署机 UTC 时区）
+DAILY_MIN_UTC = 1
 
 
 def setup_logger():
@@ -301,7 +302,7 @@ def _mark_daily_done(today):
 
 
 def run_daily_if_due(logger, force=False):
-    """应用内每日调度: UTC 10:30 后触发 run_daily.py 全量落库(当日仅一次)
+    """应用内每日调度: UTC 00:01 后触发 run_daily.py 全量落库(当日仅一次)
 
     - 标记文件防重复; 进程启动时若已过点且当日未跑, 自动补跑(catch-up)
     - 子进程独立运行, 失败不阻塞轮询主循环
@@ -311,7 +312,7 @@ def run_daily_if_due(logger, force=False):
         return False
     if not force:
         now = time.gmtime()
-        if (now.tm_hour, now.tm_min) < (DAILY_HOUR_UTC, 30):
+        if (now.tm_hour, now.tm_min) < (DAILY_HOUR_UTC, DAILY_MIN_UTC):
             return False
     logger.info("触发每日全量落库(run_daily.py, date=%s)...", today)
     try:
@@ -421,7 +422,7 @@ def main():
 
             if args.once:
                 break
-            # 每日调度检查(UTC 10:30 后触发一次全量)
+            # 每日调度检查(UTC 00:01 后触发一次全量)
             run_daily_if_due(logger)
             # 补偿运行耗时, 保持稳定间隔
             elapsed = time.time() - t0
