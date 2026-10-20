@@ -13,7 +13,7 @@ body{font-family:"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg)
 header{background:#fff;border-bottom:1px solid var(--line);padding:12px 24px;display:flex;align-items:center;gap:24px;}
 header h1{font-size:18px;color:var(--main);}
 header nav a{color:var(--sub);text-decoration:none;margin-right:16px;font-size:14px;}
-header nav a:hover{color:var(--main);}
+header nav a.active,header nav a:hover{color:var(--main);border-bottom:2px solid var(--main);}
 header .dt{font-size:13px;color:var(--sub);margin-left:auto;}
 main{padding:20px 24px;max-width:1440px;margin:0 auto;}
 .panel{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:16px 20px;margin-bottom:20px;}
@@ -45,15 +45,21 @@ pre{background:#0f172a;color:#e2e8f0;padding:14px;border-radius:8px;font-size:12
 .changes .t.upstream_changed{background:#e0f2fe;color:#0369a1;}
 .changes .t.data_synced,.changes .t.rows_changed{background:#f0f4f7;color:#475569;}
 a{color:var(--main);text-decoration:none;} a:hover{text-decoration:underline;}
+.loading{display:flex;align-items:center;justify-content:center;gap:10px;color:var(--sub);padding:40px;font-size:14px;}
+.spin{width:18px;height:18px;border:2px solid var(--line);border-top-color:var(--main);border-radius:50%;animation:rot .8s linear infinite;flex-shrink:0;}
+@keyframes rot{to{transform:rotate(360deg);}}
+.err-box{text-align:center;padding:40px;color:#c0392b;font-size:14px;}
+.err-box button{margin-left:8px;border:1px solid var(--line);background:#fff;border-radius:6px;padding:6px 16px;cursor:pointer;color:var(--sub);}
+.err-box button:hover{color:var(--main);border-color:var(--main);}
 </style>
 </head>
 <body>
 <header>
   <h1>DataWind 资产中心</h1>
-  <nav><a href="/">资产目录</a><a href="/lineage">血缘查询</a><a href="/changes">变更监控</a></nav>
-  <span class="dt" id="title"></span>
+  <nav><a href="/" class="active">资产目录</a><a href="/lineage">血缘查询</a><a href="/changes">变更监控</a></nav>
+  <span class="dt" id="title"><span class="spin" style="width:12px;height:12px;vertical-align:-2px"></span> 加载中...</span>
 </header>
-<main id="main"><div class="panel empty" style="text-align:center;color:var(--sub);padding:40px;">加载中...</div></main>
+<main id="main"><div class="loading"><span class="spin"></span>正在加载数据集详情...</div></main>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -161,8 +167,18 @@ $('lineage-svg-wrap') && document.addEventListener('click', ev => {
 });
 
 async function load(){
-  const d = await j('/api/datasets/' + dsid);
-  if (d.error){ $('main').innerHTML = `<div class="panel empty">${esc(d.error)}</div>`; $('title').textContent = d.error; return; }
+  let d;
+  try {
+    const r = await fetch('/api/datasets/' + dsid);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    d = await r.json();
+    if (d.error) throw new Error(d.error);
+  } catch(e){
+    $('main').innerHTML = `<div class="err-box">加载失败: ${esc(e.message)}
+      <button onclick="location.reload()">重试</button></div>`;
+    $('title').textContent = '加载失败';
+    return;
+  }
   $('title').textContent = `${esc(d.name)} (${d.dataset_id})`;
 
   // 树状表级血缘(hop1 + DS调度生产来源 hop2)

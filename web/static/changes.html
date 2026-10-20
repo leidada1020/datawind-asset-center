@@ -11,7 +11,7 @@ body{font-family:"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg)
 header{background:#fff;border-bottom:1px solid var(--line);padding:12px 24px;display:flex;align-items:center;gap:24px;}
 header h1{font-size:18px;color:var(--main);}
 header nav a{color:var(--sub);text-decoration:none;margin-right:16px;font-size:14px;}
-header nav a:hover{color:var(--main);}
+header nav a.active,header nav a:hover{color:var(--main);border-bottom:2px solid var(--main);}
 main{padding:20px 24px;max-width:1200px;margin:0 auto;}
 .panel{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:16px 20px;margin-bottom:20px;}
 .filters{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;}
@@ -35,17 +35,23 @@ a{color:var(--main);text-decoration:none;} a:hover{text-decoration:underline;}
 .chart-box{width:100%;}
 .chart-box svg{width:100%;height:auto;}
 .legend{font-size:12px;color:var(--sub);}
+.loading{display:flex;align-items:center;justify-content:center;gap:10px;color:var(--sub);padding:26px;font-size:13px;}
+.spin{width:16px;height:16px;border:2px solid var(--line);border-top-color:var(--main);border-radius:50%;animation:rot .8s linear infinite;flex-shrink:0;}
+@keyframes rot{to{transform:rotate(360deg);}}
+.err-box{text-align:center;padding:24px;color:#c0392b;font-size:13px;}
+.err-box button{margin-left:8px;border:1px solid var(--line);background:#fff;border-radius:6px;padding:4px 12px;cursor:pointer;color:var(--sub);}
+.err-box button:hover{color:var(--main);border-color:var(--main);}
 </style>
 </head>
 <body>
 <header>
   <h1>DataWind 资产中心</h1>
-  <nav><a href="/">资产目录</a><a href="/lineage">血缘查询</a><a href="/changes">变更监控</a></nav>
+  <nav><a href="/">资产目录</a><a href="/lineage">血缘查询</a><a href="/changes" class="active">变更监控</a></nav>
 </header>
 <main>
   <div class="panel">
     <h2>近 7 日变更趋势</h2>
-    <div class="chart-box" id="trend"></div>
+    <div class="chart-box" id="trend"><div class="loading"><span class="spin"></span>正在加载趋势...</div></div>
     <div class="legend">每日变更条数（含 5 分钟轮询信号与每日全量 diff）</div>
   </div>
   <div class="panel">
@@ -64,7 +70,7 @@ a{color:var(--main);text-decoration:none;} a:hover{text-decoration:underline;}
     </div>
     <div style="overflow-x:auto;"><table>
       <thead><tr><th>日期</th><th>类型</th><th>数据集</th><th>变更字段</th><th>明细</th><th>来源</th></tr></thead>
-      <tbody id="tb"></tbody>
+      <tbody id="tb"><tr><td colspan="6" class="loading" style="padding:24px"><span class="spin"></span>正在加载变更明细...</td></tr></tbody>
     </table></div>
     <div class="pager"><button id="prevBtn">上一页</button><span id="pageLabel"></span><button id="nextBtn">下一页</button></div>
   </div>
@@ -73,7 +79,19 @@ a{color:var(--main);text-decoration:none;} a:hover{text-decoration:underline;}
 const $ = id => document.getElementById(id);
 let page = 1, total = 0;
 function esc(s){ return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
-async function j(url){ const r = await fetch(url); return r.json(); }
+async function j(url){
+  const r = await fetch(url);
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
+}
+function errHtml(msg){ return `<div class="err-box">加载失败: ${esc(msg)} <button onclick="location.reload()">重试</button></div>`; }
+
+// 默认日期 = 赞比亚(UTC+2)业务日, 与快照 dt 口径一致
+(function(){
+  const d = new Date(Date.now() + 2 * 3600 * 1000);
+  const s = d.toISOString().slice(0, 10);
+  $('date').value = s;
+})();
 
 function diffText(diff){
   if (!diff) return '';
@@ -92,9 +110,12 @@ function diffText(diff){
 }
 
 async function loadTrend(){
-  const s = await j('/api/stats');
   const el = $('trend');
-  if (!s.changes_7d || !s.changes_7d.length){ el.innerHTML = '<div class="empty">暂无数据</div>'; return; }
+  el.innerHTML = '<div class="loading"><span class="spin"></span>正在加载趋势...</div>';
+  let s;
+  try { s = await j('/api/stats'); if (s.error) throw new Error(s.error); }
+  catch(e){ el.innerHTML = errHtml(e.message); return; }
+  if (!s.changes_7d || !s.changes_7d.length){ el.innerHTML = '<div class="empty" style="padding:20px;">暂无数据</div>'; return; }
   const W = 900, H = 180, pad = 40;
   const data = s.changes_7d;
   const max = Math.max(1, ...data.map(x => x.cnt));
@@ -114,9 +135,13 @@ async function loadTrend(){
 async function loadList(){
   const date = $('date').value;
   const type = $('type').value;
-  const d = await j(`/api/changes?date=${date}&ctype=${type}&page=${page}&size=50`);
-  if (d.error){ $('tb').innerHTML = `<tr><td colspan="6" class="empty">${esc(d.error)}</td></tr>`; return; }
-  total = d.total; $('totalLabel').textContent = `共 ${total} 条`;
+  const btn = $('q');
+  btn.disabled = true;
+  $('tb').innerHTML = '<tr><td colspan="6" class="loading" style="padding:24px"><span class="spin"></span>正在加载变更明细...</td></tr>';
+  try {
+    const d = await j(`/api/changes?date=${date}&ctype=${type}&page=${page}&size=50`);
+    if (d.error) throw new Error(d.error);
+    total = d.total; $('totalLabel').textContent = `共 ${total} 条`;
   $('pageLabel').textContent = `第 ${d.page} / ${Math.max(1, Math.ceil(total/d.size))} 页`;
   $('prevBtn').disabled = page <= 1;
   $('nextBtn').disabled = page * d.size >= total;
@@ -128,6 +153,9 @@ async function loadList(){
     <td>${diffText(i.diff)}</td>
     <td>${esc(i.remark)}</td>
   </tr>`).join('') || '<tr><td colspan="6" class="empty">无变更记录</td></tr>';
+  } catch(e){
+    $('tb').innerHTML = `<tr><td colspan="6">${errHtml(e.message)}</td></tr>`;
+  } finally { btn.disabled = false; }
 }
 
 $('q').onclick = () => { page = 1; loadList(); };

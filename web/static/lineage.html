@@ -47,6 +47,11 @@ main{padding:16px 24px;max-width:1440px;margin:0 auto;}
 .layer-band{pointer-events:none;}
 .layer-label{pointer-events:none;font-size:12px;fill:#64748b;font-weight:600;}
 .empty{color:var(--sub);text-align:center;padding:30px;}
+#graph-ov{position:absolute;inset:0;display:none;align-items:center;justify-content:center;gap:10px;background:rgba(255,255,255,.82);color:var(--sub);font-size:13px;z-index:6;backdrop-filter:blur(1px);}
+#graph-ov.show{display:flex;}
+.spin{width:18px;height:18px;border:2px solid var(--line);border-top-color:var(--main);border-radius:50%;animation:rot .8s linear infinite;flex-shrink:0;}
+@keyframes rot{to{transform:rotate(360deg);}}
+#graph-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--sub);font-size:14px;z-index:4;pointer-events:none;}
 </style>
 </head>
 <body>
@@ -99,6 +104,8 @@ main{padding:16px 24px;max-width:1440px;margin:0 auto;}
         <button id="zout" title="缩小">−</button>
         <button id="zfit" title="适配画布">⛶</button>
       </div>
+      <div id="graph-empty">输入表名或数据集ID，点击「查询血缘」查看上下游依赖</div>
+      <div id="graph-ov"><span class="spin"></span>正在解析血缘图...</div>
       <div id="detail"></div>
     </div>
   </div>
@@ -111,6 +118,14 @@ const X_GAP = 300, Y_GAP = 74, NODE_H = 34, NODE_W_MIN = 132, NODE_W_MAX = 264, 
 
 let graph = null, layers = {}, pos = {}, scale = 1, tx = 0, ty = 0;
 let W0 = 0, H0 = 0; // 画布逻辑尺寸
+let querying = false;
+
+const ov = () => $('graph-ov'), gempty = () => $('graph-empty');
+function showLoading(on, msg){
+  if (on){ ov().classList.add('show'); if (msg) ov().lastChild.textContent = msg; gempty().style.display = 'none'; }
+  else ov().classList.remove('show');
+}
+function showEmpty(msg){ gempty().textContent = msg; gempty().style.display = 'flex'; }
 
 function esc(s){ return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 function nodeW(nd){
@@ -266,17 +281,37 @@ $('zfit').onclick = fit; $('fit').onclick = fit;
 
 async function query(){
   const node = $('node').value.trim();
-  if (!node){ $('stat').textContent = '请输入表名(db.table)或数据集ID'; return; }
+  if (!node){ showEmpty('请输入表名(db.table)或数据集ID'); $('stat').textContent = '请输入表名(db.table)或数据集ID'; return; }
+  if (querying) return;
   const dir = $('dir').value, depth = $('depth').value;
+  querying = true; $('q').disabled = true;
+  showLoading(true);
   $('stat').textContent = '查询中...';
   const u = `/api/lineage/graph?node=${encodeURIComponent(node)}&direction=${dir}&depth=${depth}`;
   let d;
-  try { d = await (await fetch(u)).json(); } catch(e){ $('stat').textContent = '查询失败: ' + e; return; }
-  if (d.error){ $('stat').textContent = d.error; $('graph').innerHTML=''; graph=null; return; }
+  try {
+    const r = await fetch(u);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    d = await r.json();
+  } catch(e){
+    $('stat').textContent = '查询失败: ' + e;
+    showLoading(false); showEmpty('查询失败，请稍后重试');
+    querying = false; $('q').disabled = false;
+    return;
+  }
+  showLoading(false);
+  if (d.error){
+    $('stat').textContent = d.error; $('graph').innerHTML=''; graph=null;
+    showEmpty(d.error);
+    querying = false; $('q').disabled = false;
+    return;
+  }
   graph = d; pos = {};
+  gempty().style.display = 'none';
   const st = d.stats;
   $('stat').innerHTML = `共 <b>${st.tables}</b> 张表 / <b>${st.datasets}</b> 个数据集 / <b>${st.edges}</b> 条血缘边 · ${d.direction === 'both' ? '双向' : d.direction === 'down' ? '仅下游' : '仅上游'} ${d.depth} 跳 · 起点居中, 上游向左下游向右, 滚轮缩放/拖拽平移`;
   fit();
+  querying = false; $('q').disabled = false;
 }
 
 // 节点点击 -> 详情卡

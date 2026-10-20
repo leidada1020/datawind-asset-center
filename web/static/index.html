@@ -59,6 +59,12 @@ a.ds:hover{text-decoration:underline;}
 .changes .t.data_synced{background:#f0f4f7;color:#475569;}
 .changes .t.rows_changed{background:#f0f4f7;color:#475569;}
 .empty{color:var(--sub);text-align:center;padding:30px;font-size:14px;}
+.loading{display:flex;align-items:center;justify-content:center;gap:10px;color:var(--sub);padding:26px;font-size:13px;}
+.spin{width:16px;height:16px;border:2px solid var(--line);border-top-color:var(--main);border-radius:50%;animation:rot .8s linear infinite;flex-shrink:0;}
+@keyframes rot{to{transform:rotate(360deg);}}
+.err-box{text-align:center;padding:24px;color:#c0392b;font-size:13px;}
+.err-box button{margin-left:8px;border:1px solid var(--line);background:#fff;border-radius:6px;padding:4px 12px;cursor:pointer;color:var(--sub);}
+.err-box button:hover{color:var(--main);border-color:var(--main);}
 .layer-legend{font-size:12px;color:var(--sub);display:flex;gap:12px;flex-wrap:wrap;margin-bottom:4px;}
 .layer-legend .item{display:flex;align-items:center;gap:4px;}
 </style>
@@ -74,7 +80,7 @@ a.ds:hover{text-decoration:underline;}
   <span class="dt" id="dtLabel">加载中...</span>
 </header>
 <main>
-  <div class="cards" id="cards"></div>
+  <div class="cards" id="cards"><div class="loading"><span class="spin"></span>正在加载统计...</div></div>
 
   <div class="layout">
     <div class="side">
@@ -94,7 +100,7 @@ a.ds:hover{text-decoration:underline;}
         <span class="item"><span class="dot" style="background:#234e70"></span>fin</span>
         <span class="item"><span class="dot" style="background:#8a7b60"></span>other</span>
       </div>
-      <div class="tree" id="tree"></div>
+      <div class="tree" id="tree"><div class="loading"><span class="spin"></span>正在加载资产导航...</div></div>
     </div>
 
     <div class="content">
@@ -107,7 +113,7 @@ a.ds:hover{text-decoration:underline;}
       <div style="overflow-x:auto;">
         <table>
           <thead id="th"><tr><th>ID / 库.表</th><th>名称 / 表名</th><th>目录 / 分层</th><th>类型</th><th>调度 / 行数</th><th>状态 / 大小</th><th>上次同步 / 最近更新</th><th>来源表 / 注释</th></tr></thead>
-          <tbody id="tb"></tbody>
+          <tbody id="tb"><tr><td colspan="9" class="loading" style="padding:24px"><span class="spin"></span>正在加载资产列表...</td></tr></tbody>
         </table>
       </div>
       <div class="pager">
@@ -119,7 +125,7 @@ a.ds:hover{text-decoration:underline;}
   <div style="margin-top:20px;">
     <div class="panel" style="background:var(--card);border:1px solid var(--line);border-radius:8px;padding:16px 20px;">
       <h2 style="font-size:15px;margin-bottom:12px;">最近变更（今日）</h2>
-      <ul class="changes" id="changesList"></ul>
+      <ul class="changes" id="changesList"><li class="loading" style="padding:16px"><span class="spin"></span>正在加载变更...</li></ul>
     </div>
   </div>
 </main>
@@ -131,30 +137,43 @@ const $ = id => document.getElementById(id);
 const LAYER_COLOR = {mv:'#2b6cb0',ods:'#2f855a',dwd:'#805ad5',dim:'#319795',dws:'#c05621',ads:'#c53030',tmp:'#718096',fin:'#234e70',other:'#8a7b60'};
 const LAYER_ORDER = ['mv','ods','dwd','dim','dws','ads','tmp','fin','other'];
 
-async function j(url){ const r = await fetch(url); return r.json(); }
+async function j(url){
+  const r = await fetch(url);
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
+}
 function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function trim(s, n){ return String(s).length > n ? String(s).slice(0, n) + '…' : s; }
 function fmtSize(n){ if (n == null) return '-'; const u=['B','KB','MB','GB','TB']; let i=0; while (n>=1024 && i<u.length-1){ n/=1024; i++; } return n.toFixed(1)+' '+u[i]; }
+function errHtml(msg){
+  return `<div class="err-box">加载失败: ${esc(msg)} <button onclick="location.reload()">重试</button></div>`;
+}
 
 async function loadStats(){
-  const s = await j('/api/stats');
-  if (s.error){ $('dtLabel').textContent = s.error; return; }
-  $('dtLabel').textContent = '快照日: ' + s.dt;
-  const cards = [
-    ['数据集', s.datasets], ['Doris表', s.doris_tables], ['Doris字段', s.doris_columns],
-    ['表血缘边', s.table_edges], ['字段血缘边', s.column_edges], ['今日变更', s.changes_today]
-  ];
-  $('cards').innerHTML = cards.map(c =>
-    `<div class="card"><div class="num">${c[1]}</div><div class="lbl">${c[0]}</div></div>`).join('');
+  $('cards').innerHTML = '<div class="loading"><span class="spin"></span>正在加载统计...</div>';
+  try {
+    const s = await j('/api/stats');
+    if (s.error) throw new Error(s.error);
+    $('dtLabel').textContent = '快照日: ' + s.dt;
+    const cards = [
+      ['数据集', s.datasets], ['Doris表', s.doris_tables], ['Doris字段', s.doris_columns],
+      ['表血缘边', s.table_edges], ['字段血缘边', s.column_edges], ['今日变更', s.changes_today]
+    ];
+    $('cards').innerHTML = cards.map(c =>
+      `<div class="card"><div class="num">${c[1]}</div><div class="lbl">${c[0]}</div></div>`).join('');
+  } catch (e) { $('cards').innerHTML = errHtml(e.message); }
 }
 
 // ---------- 左侧导航树 ----------
 let layerTree = [], folderTree = [];
 
 async function loadTrees(){
-  layerTree = await j('/api/doris/layers');
-  folderTree = await j('/api/folder_tree');
-  renderTree();
+  $('tree').innerHTML = '<div class="loading"><span class="spin"></span>正在加载资产导航...</div>';
+  try {
+    const [l, f] = await Promise.all([j('/api/doris/layers'), j('/api/folder_tree')]);
+    layerTree = l; folderTree = f;
+    renderTree();
+  } catch (e) { $('tree').innerHTML = errHtml(e.message); }
 }
 
 function renderTree(){
@@ -251,10 +270,14 @@ function setTh(m){
 
 async function loadList(){
   const kw = encodeURIComponent($('kw').value.trim());
+  const btn = $('searchBtn');
+  btn.disabled = true;
+  $('tb').innerHTML = '<tr><td colspan="9" class="loading" style="padding:24px"><span class="spin"></span>正在加载资产列表...</td></tr>';
+  try {
   if (mode === 'layer'){
     const q = `/api/doris/tables?keyword=${kw}&layer=${encodeURIComponent(layerSel)}&db=${encodeURIComponent(dbSel)}&page=${page}&size=20`;
     const d = await j(q);
-    if (d.error){ $('tb').innerHTML = `<tr><td colspan="9" class="empty">${d.error}</td></tr>`; return; }
+    if (d.error) throw new Error(d.error);
     total = d.total; $('totalLabel').textContent = `共 ${total} 张表`;
     $('pageLabel').textContent = `第 ${d.page} / ${Math.max(1, Math.ceil(total/d.size))} 页`;
     $('prevBtn').disabled = page <= 1;
@@ -269,11 +292,11 @@ async function loadList(){
       <td>${fmtSize(i.size)}</td>
       <td>${esc(i.utime)}</td>
       <td title="${esc(i.comment)}">${esc(trim(i.comment, 40))}</td>
-    </tr>`).join('');
+    </tr>`).join('') || '<tr><td colspan="9" class="empty">无匹配表</td></tr>';
   } else {
     const q = `/api/datasets?keyword=${kw}&folder=${encodeURIComponent(folderSel)}&page=${page}&size=20`;
     const d = await j(q);
-    if (d.error){ $('tb').innerHTML = `<tr><td colspan="9" class="empty">${d.error}</td></tr>`; return; }
+    if (d.error) throw new Error(d.error);
     total = d.total; $('totalLabel').textContent = `共 ${total} 个数据集`;
     $('pageLabel').textContent = `第 ${d.page} / ${Math.max(1, Math.ceil(total/d.size))} 页`;
     $('prevBtn').disabled = page <= 1;
@@ -288,20 +311,27 @@ async function loadList(){
       <td>${i.rows_cnt ?? '-'}</td>
       <td>${esc(i.last_sync)}</td>
       <td title="${esc(i.source_tables)}">${esc(trim(i.source_tables, 40))}</td>
-    </tr>`).join('');
+    </tr>`).join('') || '<tr><td colspan="9" class="empty">无匹配数据集</td></tr>';
   }
+  } catch (e) {
+    $('tb').innerHTML = `<tr><td colspan="9">${errHtml(e.message)}</td></tr>`;
+  } finally { btn.disabled = false; }
 }
 
 async function loadChanges(){
-  const d = await j('/api/changes?size=10');
-  const list = $('changesList');
-  if (!d.items || !d.items.length){ list.innerHTML = '<li class="empty">今日暂无变更</li>'; return; }
-  list.innerHTML = d.items.map(i => `<li>
-    <span class="t ${i.type}">${esc(i.type_name)}</span>
-    <a class="ds" href="/dataset/${i.dataset_id}">${esc(i.name)}</a>
-    <span style="color:var(--sub)">[${i.dataset_id}]</span>
-    ${i.fields ? '<span style="color:var(--sub)">字段: ' + esc(i.fields) + '</span>' : ''}
-  </li>`).join('');
+  $('changesList').innerHTML = '<li class="loading" style="padding:16px"><span class="spin"></span>正在加载变更...</li>';
+  try {
+    const d = await j('/api/changes?size=10');
+    if (d.error) throw new Error(d.error);
+    const list = $('changesList');
+    if (!d.items || !d.items.length){ list.innerHTML = '<li class="empty">今日暂无变更</li>'; return; }
+    list.innerHTML = d.items.map(i => `<li>
+      <span class="t ${i.type}">${esc(i.type_name)}</span>
+      <a class="ds" href="/dataset/${i.dataset_id}">${esc(i.name)}</a>
+      <span style="color:var(--sub)">[${i.dataset_id}]</span>
+      ${i.fields ? '<span style="color:var(--sub)">字段: ' + esc(i.fields) + '</span>' : ''}
+    </li>`).join('');
+  } catch (e) { $('changesList').innerHTML = `<li>${errHtml(e.message)}</li>`; }
 }
 
 $('searchBtn').onclick = () => { page = 1; loadList(); };
