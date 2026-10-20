@@ -51,6 +51,12 @@ a{color:var(--main);text-decoration:none;} a:hover{text-decoration:underline;}
 .err-box{text-align:center;padding:40px;color:#c0392b;font-size:14px;}
 .err-box button{margin-left:8px;border:1px solid var(--line);background:#fff;border-radius:6px;padding:6px 16px;cursor:pointer;color:var(--sub);}
 .err-box button:hover{color:var(--main);border-color:var(--main);}
+.back-bar{display:flex;align-items:center;gap:12px;margin-bottom:14px;}
+.back-bar a.back{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--main);
+  border:1px solid var(--line);background:#fff;border-radius:6px;padding:6px 12px;text-decoration:none;}
+.back-bar a.back:hover{border-color:var(--main);text-decoration:none;}
+.back-bar .crumb{font-size:13px;color:var(--sub);}
+.back-bar .crumb b{color:var(--text);font-weight:500;}
 </style>
 </head>
 <body>
@@ -60,7 +66,6 @@ a{color:var(--main);text-decoration:none;} a:hover{text-decoration:underline;}
   <span class="dt" id="title"><span class="spin" style="width:12px;height:12px;vertical-align:-2px"></span> 加载中...</span>
 </header>
 <main id="main"><div class="loading"><span class="spin"></span>正在加载数据集详情...</div></main>
-
 <script>
 const $ = id => document.getElementById(id);
 const dsid = parseInt(location.pathname.split('/')[2]);
@@ -209,6 +214,10 @@ async function load(){
   const kv = (k, v) => `<div><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`;
 
   $('main').innerHTML = `
+    <div class="back-bar">
+      <a class="back" href="/">← 返回资产目录</a>
+      <span class="crumb">数据集详情 / <b>${esc(d.name)}</b></span>
+    </div>
     <div class="panel"><h2>基本信息</h2>
       <div class="kv">
         ${kv('数据集ID', d.dataset_id)}${kv('名称', d.name)}${kv('文件夹', d.folder_path)}

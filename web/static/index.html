@@ -365,7 +365,46 @@ for (const id of ['dsType','dsStatus','dsSource','dsFreq'])
 $('prevBtn').onclick = () => { if (page > 1){ page--; loadList(); } };
 $('nextBtn').onclick = () => { if (page * 20 < total){ page++; loadList(); } };
 
-setTh(mode);
+// ---------- 目录状态记忆: 详情页返回时保留搜索/筛选/页码 ----------
+const ST_KEY = 'assetCatalogState';
+function saveState(){
+  try {
+    sessionStorage.setItem(ST_KEY, JSON.stringify({
+      mode,
+      kw: $('kw').value,
+      layerSel, dbSel, folderSel, folderName,
+      dsType: $('dsType').value, dsStatus: $('dsStatus').value,
+      dsSource: $('dsSource').value, dsFreq: $('dsFreq').value,
+      page
+    }));
+  } catch (e) { /* 忽略 */ }
+}
+function restoreState(){
+  let s = null;
+  try { s = JSON.parse(sessionStorage.getItem(ST_KEY) || 'null'); } catch (e) { /* 忽略 */ }
+  if (!s) return false;
+  mode = s.mode === 'folder' ? 'folder' : 'layer';
+  $('kw').value = s.kw || '';
+  layerSel = s.layerSel || ''; dbSel = s.dbSel || '';
+  folderSel = s.folderSel || ''; folderName = s.folderName || '';
+  $('dsType').value = s.dsType || ''; $('dsStatus').value = s.dsStatus || '';
+  $('dsSource').value = s.dsSource || ''; $('dsFreq').value = s.dsFreq || '';
+  page = Math.max(1, s.page || 1);
+  $('mLayer').classList.toggle('active', mode === 'layer');
+  $('mFolder').classList.toggle('active', mode === 'folder');
+  for (const id of ['dsType','dsStatus','dsSource','dsFreq'])
+    $(id).style.display = mode === 'folder' ? '' : 'none';
+  return true;
+}
+// 点击详情链接(数据集/表/变更)前记忆当前目录状态
+document.addEventListener('click', e => {
+  const a = e.target.closest('a.ds');
+  if (a && a.href && a.href.startsWith(location.origin)) saveState();
+});
+// 从详情页返回时保留状态, 否则清掉过期状态
+if (!restoreState()) sessionStorage.removeItem(ST_KEY);
+
+setTh(mode); renderCrumb();
 loadStats(); loadTrees(); loadList(); loadChanges();
 </script>
 </body>
