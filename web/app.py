@@ -206,8 +206,16 @@ def api_dataset_detail(dsid: int):
         info["lineage_tree"] = {"dataset_id": dsid, "name": info.get("name", ""),
                                 "upstream": tree_ups}
         # 字段级血缘(该数据集 target_field -> src)
+        # 仅展示最终查询结果字段: 过滤 pending/无来源/通配符*/纯数字索引(常量列)噪音
         fc = d.exec("SELECT target_field, src_table, src_field, confidence FROM etl.dwd_datawind_column_lineage_t_d WHERE dt=%s AND dataset_id=%s ORDER BY target_field", (dt, dsid), fetch=True)
-        info["field_lineage"] = [{"target": r[0], "src_table": r[1] or "", "src_field": r[2] or "", "conf": r[3]} for r in fc]
+        info["field_lineage"] = []
+        for r in fc:
+            t, st, sf, conf = r[0], r[1] or "", r[2] or "", r[3]
+            if conf == "pending" or (not st and not sf):
+                continue
+            if t == "*" or (t and t.isdigit()):
+                continue
+            info["field_lineage"].append({"target": t, "src_table": st, "src_field": sf, "conf": conf})
         # 变更历史(该数据集)
         ch = d.exec("SELECT dt, change_type, change_type_name, changed_fields, diff_json, remark FROM etl.dwd_datawind_dataset_change_i_d WHERE dataset_id=%s ORDER BY dt DESC, change_id DESC LIMIT 20", (dsid,), fetch=True)
         info["change_history"] = [{"dt": str(r[0]), "type": r[1], "type_name": r[2], "fields": r[3], "diff": r[4], "remark": r[5]} for r in ch]

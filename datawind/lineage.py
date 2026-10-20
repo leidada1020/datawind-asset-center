@@ -98,8 +98,13 @@ class LineageParser:
                           避免与内层真实边重复; 若整列仅剩未解析引用则跳过该投影列
         """
         edges = []
-        for sel in ast.find_all(exp.Select):
-            # 每个 SELECT 各自构建一次映射, 避免跨查询串扰
+        # 仅最终查询结果字段: 只取最外层顶层 SELECT 的投影列作为目标字段,
+        # 子查询/CTE 内层的列只作为来源, 不再单独产出目标边
+        if isinstance(ast, exp.Select):
+            top_selects = [ast]
+        else:
+            top_selects = list(ast.find_all(exp.Select))[:1] or []
+        for sel in top_selects:
             alias_map, bare_tables = self._alias_map(sel, cte_names)
             # 唯一真实表兜底: 有别名时看别名集合去重后是否唯一; 无别名时看裸表是否唯一
             unique_real = None
@@ -110,6 +115,9 @@ class LineageParser:
             elif len(bare_tables) == 1:
                 unique_real = bare_tables[0]
             for proj in sel.expressions:
+                # 通配符 SELECT *: 非明确结果字段, 跳过
+                if isinstance(proj, exp.Star):
+                    continue
                 if isinstance(proj, exp.Alias):
                     target = proj.alias or ""
                     src_expr = proj.this
@@ -150,11 +158,10 @@ class LineageParser:
                 elif src_cols:
                     for c in src_cols:
                         edges.append((target, c, "medium"))
-                elif unresolved and isinstance(src_expr, exp.Column):
-                    # 整列仅剩子查询/CTE 别名引用: 内层 Select 已覆盖, 本层跳过避免重复
+                elif unresolved:
+                    # 整列仅剩子查询/CTE 别名引用: 内层已作为来源, 本层跳过
                     continue
-                else:
-                    edges.append((target, None, "pending"))
+                # 常量/纯数字/无来源表达式(如 SELECT 1, 10): 不是有效结果字段血缘, 不产出
         return edges
 
     # ---------- 主入口 ----------
