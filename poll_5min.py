@@ -189,7 +189,8 @@ def write_changes(doris, changes, logger):
     dt = _today_local()
     etl_time = time.strftime("%Y-%m-%d %H:%M:%S", _local_now())
     cid = next_change_id(doris)
-    names = {"added": "新增", "deleted": "删除", "mtime_changed": "元数据修改(5分钟轮询信号)"}
+    names = {"added": "新增", "deleted": "删除",
+             "logic_changed": "加工逻辑变化", "source_changed": "数据源切换"}
     ins = ("INSERT INTO %s (dt, etl_time, change_id, dataset_id, dataset_name, change_type, "
            "change_type_name, changed_fields, diff_json, folder_path, remark) "
            "VALUES (%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s)"
@@ -235,6 +236,32 @@ def sync_lineage_incremental(client, doris, sync_map, logger):
             except Exception as e:
                 logger.warning("血缘增量同步[%s] 拉取加工SQL失败: %s", dsid, e)
                 continue
+            # 实质变更检测: 对比当日快照 -> 加工逻辑变化/数据源切换(仅mtime变化不记录)
+            try:
+                old = doris.exec(
+                    "SELECT sql_logic, data_source_type, data_source_id, cluster_name, source_db "
+                    "FROM %s WHERE dt=%%s AND dataset_id=%%s"
+                    % TBL_SNAPSHOT.format(db=doris.db), (dt, dsid_int), fetch=True)
+                old_row = old[0] if old else None
+                extra_changes = []
+                if old_row is not None:
+                    old_sql = (old_row[0] or "").strip()
+                    new_sql = (sql or "").strip()
+                    if old_sql and new_sql and old_sql != new_sql:
+                        extra_changes.append(("logic_changed", dsid_int, (meta or {}).get("name") or "",
+                                              {"sql_logic": {"old": old_sql[:2000], "new": new_sql[:2000]}}))
+                    src_old = [old_row[1] or "", old_row[2] or "", old_row[3] or "", old_row[4] or ""]
+                    src_new = [(ds_src or {}).get("type") or "", (ds_src or {}).get("id") or "",
+                               (ds_src or {}).get("cluster") or "", (ds_src or {}).get("db") or ""]
+                    if src_old != src_new:
+                        extra_changes.append(("source_changed", dsid_int, (meta or {}).get("name") or "",
+                                              {"data_source": {"old": src_old, "new": src_new}}))
+                if extra_changes:
+                    write_changes(doris, extra_changes, logger)
+                    logger.info("实质变更[%s]: %s", dsid,
+                                ", ".join(c[0] for c in extra_changes))
+            except Exception as e:
+                logger.warning("血缘增量同步[%s] 实质变更检测失败: %s", dsid, e)
             if not sql:
                 continue
             tables, cols, st = parser.parse_multi(sql, dsid_int)
@@ -363,25 +390,29 @@ def poll_once(client, doris, baseline, logger):
     for i, old in baseline.items():
         if i not in current:
             changes.append(("deleted", i, old.get("name") or "", {"old": {"name": old.get("name")}}))
-    # 元数据修改(mtime 变化)
+    # 元数据修改(mtime 变化): 不直接记变更, 仅作为"可能逻辑/数据源变化"的信号
+    #   由 sync_lineage_incremental 拉取加工逻辑后对比当日快照, 只记实质变化
+    changed_meta = []
     for i, d in current.items():
         old = baseline.get(i)
         if old and old.get("mtime") != d["mtime"]:
-            changes.append(("mtime_changed", i, d["name"],
-                            {"mtime": {"old": old.get("mtime"), "new": d["mtime"]}}))
-    write_changes(doris, changes, logger)
+            changed_meta.append((i, d["name"], d["mtime"]))
+    # 仅写新增/删除(实质变更); mtime 信号变更由增量同步里判断后写入
+    write_changes(doris, [c for c in changes if c[0] in ("added", "deleted")], logger)
     save_baseline(current)
     # 增量血缘同步: 新增/元数据修改的数据集重新解析(重接口按需, 不阻塞主流程),
-    #   并顺手将最新加工SQL/来源表/字段清单更新进当日快照(详情页准实时)
+    #   并顺手将最新加工SQL/来源表/字段清单更新进当日快照(详情页准实时);
+    #   同时对比当日快照检测 加工逻辑变化(logic_changed)/数据源切换(source_changed) 写入变更
     sync_map = {}
     for ct, rid, rname, diff in changes:
         if ct == "added":
             sync_map[rid] = {"mtime": (diff.get("new") or {}).get("mtime", ""), "name": rname}
-        elif ct == "mtime_changed":
-            sync_map[rid] = {"mtime": (diff.get("mtime") or {}).get("new", ""), "name": rname}
+    for rid, rname, mt in changed_meta:
+        sync_map[rid] = {"mtime": mt, "name": rname}
     if sync_map:
         sync_lineage_incremental(client, doris, sync_map, logger)
-    logger.info("轮询完成: 数据集=%d, 变更=%d (基线已更新)", len(current), len(changes))
+    logger.info("轮询完成: 数据集=%d, 新增/删除=%d, 待核查mtime=%d (基线已更新)",
+                len(current), len(changes), len(changed_meta))
     return len(changes)
 
 

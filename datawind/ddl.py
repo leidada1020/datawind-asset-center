@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS {db}.dwd_datawind_dataset_change_i_d (
     etl_time            DATETIME     NOT NULL COMMENT '数据处理时间',
     dataset_id          BIGINT       NOT NULL COMMENT '数据集ID',
     dataset_name        VARCHAR(512) COMMENT '数据集名称(变更后)',
-    change_type         VARCHAR(32)  COMMENT '变更类别编码: added=新增 deleted=删除 config_changed=配置修改 data_synced=数据同步更新 rows_changed=行数变化 upstream_changed=上游表变化 folder_changed=文件夹变更',
+    change_type         VARCHAR(32)  COMMENT '变更类别编码: added=新增 deleted=删除 config_changed=配置修改 logic_changed=加工逻辑变化 source_changed=数据源切换 upstream_changed=上游表变化 folder_changed=文件夹变更(行数/同步时间变化不计变更)',
     change_type_name    VARCHAR(64)  COMMENT '变更类别中文名(与change_type一一对应)',
     changed_fields      VARCHAR(2000) COMMENT '发生变化的字段名列表(逗号分隔; 删除时=DELETED)',
     diff_json           TEXT         COMMENT '变更明细JSON(字段名->新旧值映射, 删除时=DELETED)',

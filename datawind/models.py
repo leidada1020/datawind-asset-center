@@ -94,7 +94,7 @@ CONFIG_FIELDS = ["name", "type_code", "status", "sync_type", "frequency", "sched
                  "schedule_day", "ttl", "connection_mode", "partition_filter", "confidentiality"]
 
 CHANGE_NAMES = {"added": "新增", "deleted": "删除", "config_changed": "配置修改",
-                "data_synced": "数据同步更新", "rows_changed": "行数变化",
+                "logic_changed": "加工逻辑变化", "source_changed": "数据源切换",
                 "upstream_changed": "上游表变化", "folder_changed": "文件夹变更"}
 
 
@@ -139,16 +139,23 @@ def diff_changes(current, prev):
                                         "folder_path": {"old": old.get("folder_path"), "new": d.get("folder_path")}},
                                        ensure_ascii=False),
                             d["folder_path"]))
-        if old.get("last_success_task_time") != d.get("last_success_task_time"):
-            changes.append(("data_synced", i, d["name"], "last_success_task_time",
-                            json.dumps({"last_success_task_time": {"old": str(old.get("last_success_task_time")),
-                                                                    "new": str(d.get("last_success_task_time"))}},
+        # 加工逻辑变化: 加工SQL全文对比(直连/无SQL数据集不产生该类型)
+        old_sql = (old.get("sql_logic") or "").strip()
+        new_sql = (d.get("sql_logic") or "").strip()
+        if old_sql and new_sql and old_sql != new_sql:
+            changes.append(("logic_changed", i, d["name"], "sql_logic",
+                            json.dumps({"sql_logic": {"old": old_sql[:2000], "new": new_sql[:2000]}},
                                        ensure_ascii=False),
                             d["folder_path"]))
-        if old.get("rows_cnt") != d.get("rows_cnt"):
-            changes.append(("rows_changed", i, d["name"], "rows_cnt",
-                            json.dumps({"rows_cnt": {"old": old.get("rows_cnt"), "new": d.get("rows_cnt")}},
-                                       ensure_ascii=False),
+        # 数据源切换: type/id/cluster/db 任一变化
+        src_fields = ["data_source_type", "data_source_id", "cluster_name", "source_db"]
+        src_diff = {}
+        for f in src_fields:
+            if (old.get(f) or "") != (d.get(f) or ""):
+                src_diff[f] = {"old": old.get(f) or "", "new": d.get(f) or ""}
+        if src_diff:
+            changes.append(("source_changed", i, d["name"], ",".join(src_diff.keys()),
+                            json.dumps(src_diff, ensure_ascii=False),
                             d["folder_path"]))
         if (old.get("upstream") or "") != (d.get("upstream") or ""):
             changes.append(("upstream_changed", i, d["name"], "upstream",

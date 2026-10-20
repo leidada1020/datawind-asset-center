@@ -26,10 +26,9 @@ a{color:var(--main);text-decoration:none;} a:hover{text-decoration:underline;}
 .t.added{background:#e6f4ea;color:#1a7f37;}
 .t.deleted{background:#fde8e8;color:#c0392b;}
 .t.config_changed{background:#fdf0e3;color:#b45309;}
-.t.mtime_changed{background:#e8e8fd;color:#4c46b8;}
 .t.upstream_changed{background:#e0f2fe;color:#0369a1;}
-.t.data_synced{background:#f0f4f7;color:#475569;}
-.t.rows_changed{background:#f0f4f7;color:#475569;}
+.t.logic_changed{background:#fff3e0;color:#e65100;}
+.t.source_changed{background:#fce4ec;color:#c2185b;}
 .pager{display:flex;gap:10px;align-items:center;margin-top:14px;font-size:13px;color:var(--sub);}
 .pager button{border:1px solid var(--line);background:#fff;border-radius:6px;padding:5px 12px;cursor:pointer;}
 .pager button:disabled{opacity:.4;cursor:default;}
@@ -63,9 +62,9 @@ a{color:var(--main);text-decoration:none;} a:hover{text-decoration:underline;}
       <select id="type">
         <option value="">全部类型</option>
         <option value="added">新增</option><option value="deleted">删除</option>
-        <option value="config_changed">配置修改</option><option value="data_synced">数据同步更新</option>
-        <option value="rows_changed">行数变化</option><option value="upstream_changed">上游表变化</option>
-        <option value="folder_changed">文件夹变更</option><option value="mtime_changed">元数据修改(轮询)</option>
+        <option value="config_changed">配置修改</option><option value="logic_changed">加工逻辑变化</option>
+        <option value="source_changed">数据源切换</option><option value="upstream_changed">上游表变化</option>
+        <option value="folder_changed">文件夹变更</option>
       </select>
       <button id="q" style="border:1px solid var(--line);background:#fff;border-radius:6px;padding:7px 16px;cursor:pointer;">查询</button>
       <span style="margin-left:auto;font-size:13px;color:var(--sub);" id="totalLabel"></span>

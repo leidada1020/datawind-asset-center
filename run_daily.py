@@ -288,7 +288,8 @@ def main():
         rows = doris.exec(
             "SELECT dataset_id, name, type_code, status, sync_type, frequency, schedule_time, "
             "schedule_day, ttl, connection_mode, partition_filter, confidentiality, "
-            "last_success_task_time, rows_cnt, upstream, folder_id, folder_path, mtime "
+            "last_success_task_time, rows_cnt, upstream, folder_id, folder_path, mtime, "
+            "sql_logic, data_source_type, data_source_id, cluster_name, source_db "
             "FROM %s WHERE dt = %%s" % TBL_SNAPSHOT.format(db=doris.db), (prev_date,), fetch=True)
         prev = {}
         for r in rows:
@@ -297,7 +298,10 @@ def main():
                           "ttl": r[8], "connection_mode": r[9], "partition_filter": r[10],
                           "confidentiality": r[11], "last_success_task_time": r[12],
                           "rows_cnt": r[13], "upstream": r[14] or "", "folder_id": r[15],
-                          "folder_path": r[16] or "", "mtime": r[17]}
+                          "folder_path": r[16] or "", "mtime": r[17],
+                          "sql_logic": r[18] or "", "data_source_type": r[19] or "",
+                          "data_source_id": r[20] or "", "cluster_name": r[21] or "",
+                          "source_db": r[22] or ""}
         changes = models.diff_changes(current, prev)
 
     # 血缘解析落库（可选；不阻塞快照主流程）
