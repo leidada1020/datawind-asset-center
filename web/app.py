@@ -509,7 +509,8 @@ def api_changes(date: str = "", date_from: str = "", date_to: str = "",
             where.append("changed_fields LIKE %s")
             args.append("%%%s%%" % fields)
         if source == "daily":
-            where.append("(remark IS NULL OR remark = '')")
+            where.append("remark = %s")
+            args.append("每日全量")
         elif source == "poll":
             where.append("remark LIKE %s")
             args.append("%%轮询%%")
