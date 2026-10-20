@@ -184,8 +184,12 @@ def lineage_diff(prev_dt, cur_dt, doris, dataset_names):
 
 
 def main():
+    # 业务时区: 赞比亚 UTC+2 (CAT, 无夏令时)。快照日期/处理时间按本地时间, 与 poll_5min 口径一致。
+    def _local_now():
+        return time.gmtime(time.time() + 2 * 3600)
+
     ap = argparse.ArgumentParser()
-    ap.add_argument("--date", default=time.strftime("%Y-%m-%d"), help="快照日期, 默认今天")
+    ap.add_argument("--date", default=time.strftime("%Y-%m-%d", _local_now()), help="快照日期, 默认赞比亚今天")
     ap.add_argument("--config", default=None, help="配置文件路径")
     ap.add_argument("--no-lineage", action="store_true", help="跳过血缘解析(降级模式)")
     args = ap.parse_args()
@@ -224,7 +228,7 @@ def main():
     print("==> 表已就绪: 快照/变更/文件夹/表血缘/字段血缘/解析统计/闭包/Doris表资产/Doris字段资产/DS调度资产/DS表间血缘")
 
     # 文件夹树快照写入
-    etl_time = time.strftime("%Y-%m-%d %H:%M:%S")
+    etl_time = time.strftime("%Y-%m-%d %H:%M:%S", _local_now())
     fn = write_folder_snapshot(doris, stat_date, etl_time, tree_data)
     print("==> 文件夹树快照 %d 条 (dt=%s)" % (fn, stat_date))
 

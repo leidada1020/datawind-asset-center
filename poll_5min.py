@@ -49,9 +49,22 @@ TBL_CLOSURE = "{db}.dwd_datawind_lineage_closure_t_d"
 MAX_CONSEC_FAIL = 5      # 连续失败 N 次进入熔断
 COOLDOWN_SEC = 1800      # 熔断休息 30 分钟
 
+# 业务时区: 赞比亚 = UTC+2 (CAT, 全年无夏令时)。所有"日期/触发点"按赞比亚本地时间计算。
+TZ_OFFSET_SEC = 2 * 3600
+
 # 每日全量调度（应用内自触发, 不依赖 cron/systemd）
-DAILY_HOUR_UTC = 0      # 每日 UTC 00:01 触发 run_daily（部署机 UTC 时区）
-DAILY_MIN_UTC = 1
+DAILY_HOUR = 0          # 每日本地(UTC+2) 00:01 触发 run_daily
+DAILY_MIN = 1
+
+
+def _local_now():
+    """赞比亚本地时间(UTC+2)"""
+    return time.gmtime(time.time() + TZ_OFFSET_SEC)
+
+
+def _today_local():
+    """赞比亚本地日期(业务日)"""
+    return time.strftime("%Y-%m-%d", _local_now())
 
 
 def setup_logger():
@@ -166,15 +179,15 @@ def build_current(ds_list):
 def next_change_id(doris):
     """当日最大 change_id + 1（与 dt 构成唯一键, 幂等）"""
     rows = doris.exec("SELECT COALESCE(MAX(change_id), 0) + 1 FROM %s WHERE dt = %%s"
-                      % TBL_CHANGE.format(db=doris.db), (time.strftime("%Y-%m-%d"),), fetch=True)
+                      % TBL_CHANGE.format(db=doris.db), (_today_local(),), fetch=True)
     return rows[0][0] if rows and rows[0] else 1
 
 
 def write_changes(doris, changes, logger):
     if not changes:
         return
-    dt = time.strftime("%Y-%m-%d")
-    etl_time = time.strftime("%Y-%m-%d %H:%M:%S")
+    dt = _today_local()
+    etl_time = time.strftime("%Y-%m-%d %H:%M:%S", _local_now())
     cid = next_change_id(doris)
     names = {"added": "新增", "deleted": "删除", "mtime_changed": "元数据修改(5分钟轮询信号)"}
     ins = ("INSERT INTO %s (dt, etl_time, change_id, dataset_id, dataset_name, change_type, "
@@ -207,8 +220,8 @@ def sync_lineage_incremental(client, doris, sync_map, logger):
     if not sync_map:
         return 0
     parser = LineageParser()
-    dt = time.strftime("%Y-%m-%d")
-    etl_time = time.strftime("%Y-%m-%d %H:%M:%S")
+    dt = _today_local()
+    etl_time = time.strftime("%Y-%m-%d %H:%M:%S", _local_now())
     synced = 0
     for dsid, meta in sync_map.items():
         try:
@@ -283,10 +296,6 @@ def sync_lineage_incremental(client, doris, sync_map, logger):
     return synced
 
 
-def _today_utc():
-    return time.strftime("%Y-%m-%d", time.gmtime())
-
-
 def _daily_mark_file(today):
     return os.path.join(DAILY_MARK_DIR, today)
 
@@ -298,21 +307,21 @@ def _daily_done(today):
 def _mark_daily_done(today):
     os.makedirs(DAILY_MARK_DIR, exist_ok=True)
     with open(_daily_mark_file(today), "w", encoding="utf-8") as f:
-        f.write(time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()))
+        f.write(time.strftime("%Y-%m-%d %H:%M:%S", _local_now()))
 
 
 def run_daily_if_due(logger, force=False):
-    """应用内每日调度: UTC 00:01 后触发 run_daily.py 全量落库(当日仅一次)
+    """应用内每日调度: 本地(UTC+2) 00:01 后触发 run_daily.py 全量落库(当日仅一次)
 
     - 标记文件防重复; 进程启动时若已过点且当日未跑, 自动补跑(catch-up)
     - 子进程独立运行, 失败不阻塞轮询主循环
     """
-    today = _today_utc()
+    today = _today_local()
     if not force and _daily_done(today):
         return False
     if not force:
-        now = time.gmtime()
-        if (now.tm_hour, now.tm_min) < (DAILY_HOUR_UTC, DAILY_MIN_UTC):
+        now = _local_now()
+        if (now.tm_hour, now.tm_min) < (DAILY_HOUR, DAILY_MIN):
             return False
     logger.info("触发每日全量落库(run_daily.py, date=%s)...", today)
     try:
@@ -422,7 +431,7 @@ def main():
 
             if args.once:
                 break
-            # 每日调度检查(UTC 00:01 后触发一次全量)
+            # 每日调度检查(本地 UTC+2 00:01 后触发一次全量)
             run_daily_if_due(logger)
             # 补偿运行耗时, 保持稳定间隔
             elapsed = time.time() - t0
