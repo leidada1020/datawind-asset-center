@@ -187,8 +187,11 @@ async function load(){
 
   // 字段级血缘表
   const fl = d.field_lineage || [];
-  const flRows = fl.map(f => `<tr><td>${esc(f.target)}</td><td>${esc(f.src_table)}</td><td>${esc(f.src_field)}</td>
-    <td><span class="conf ${f.conf}">${f.conf}</span></td></tr>`).join('') ||
+  const flRows = fl.map(f => {
+    const biz = f.business && f.business !== f.target ? f.business + ' (' + f.target + ')' : (f.target || '');
+    return `<tr><td>${esc(biz)}</td><td>${esc(f.src_table)}</td><td>${esc(f.src_field)}</td>
+    <td><span class="conf ${f.conf}">${f.conf}</span></td></tr>`;
+  }).join('') ||
     '<tr><td colspan="4" class="empty">无字段级血缘</td></tr>';
 
   // 字段清单

@@ -206,7 +206,13 @@ def api_dataset_detail(dsid: int):
         info["lineage_tree"] = {"dataset_id": dsid, "name": info.get("name", ""),
                                 "upstream": tree_ups}
         # 字段级血缘(该数据集 target_field -> src)
-        # 仅展示最终查询结果字段: 过滤 pending/无来源/通配符*/纯数字索引(常量列)噪音
+        # 仅展示最终查询结果字段: 过滤 pending/无来源/通配符*/纯数字索引(常量列)噪音;
+        # 目标字段补齐业务列名(来自字段清单 name->business 映射, DataWind结果字段以业务列展示)
+        biz_map = {}
+        for f in fields:
+            if isinstance(f, dict) and f.get("name"):
+                b = f.get("business")
+                biz_map[f["name"]] = (b[0] if isinstance(b, list) and b else (b or ""))
         fc = d.exec("SELECT target_field, src_table, src_field, confidence FROM etl.dwd_datawind_column_lineage_t_d WHERE dt=%s AND dataset_id=%s ORDER BY target_field", (dt, dsid), fetch=True)
         info["field_lineage"] = []
         for r in fc:
@@ -215,7 +221,8 @@ def api_dataset_detail(dsid: int):
                 continue
             if t == "*" or (t and t.isdigit()):
                 continue
-            info["field_lineage"].append({"target": t, "src_table": st, "src_field": sf, "conf": conf})
+            info["field_lineage"].append({"target": t, "business": biz_map.get(t, ""),
+                                          "src_table": st, "src_field": sf, "conf": conf})
         # 变更历史(该数据集)
         ch = d.exec("SELECT dt, change_type, change_type_name, changed_fields, diff_json, remark FROM etl.dwd_datawind_dataset_change_i_d WHERE dataset_id=%s ORDER BY dt DESC, change_id DESC LIMIT 20", (dsid,), fetch=True)
         info["change_history"] = [{"dt": str(r[0]), "type": r[1], "type_name": r[2], "fields": r[3], "diff": r[4], "remark": r[5]} for r in ch]
