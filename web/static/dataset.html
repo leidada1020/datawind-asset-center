@@ -246,7 +246,7 @@ async function doSearch(){
     if (d.error) throw new Error(d.error);
     box.innerHTML = '<div class="tt">搜索结果 (共 ' + d.total + '):</div>' +
       (d.items || []).map(x =>
-        `<div class="tnode ${x.dataset_id === curDsid ? 'sel' : ''}" onclick="loadDetail(${x.dataset_id})">
+        `<div class="tnode ${x.dataset_id === curDsid ? 'sel' : ''}" data-id="${x.dataset_id}" onclick="loadDetail(${x.dataset_id})">
           <span class="tw"></span><span class="nm">${esc(x.name)}</span><span class="cnt">${x.dataset_id}</span></div>`).join('')
       || '<div class="empty">无匹配数据集</div>';
   } catch(e){ box.innerHTML = errHtml(e.message); }
@@ -350,8 +350,16 @@ document.addEventListener('click', ev => {
   const g = ev.target.closest('.lnode'); if (!g) return;
   window.open('/lineage?node=' + encodeURIComponent(g.dataset.q), '_blank');
 });
+// 点击搜索结果节点 -> 切换详情（事件委托, 兼容内联 onclick 失效场景）
+document.addEventListener('click', ev => {
+  const t = ev.target.closest('.tnode'); if (!t) return;
+  const id = t.getAttribute('data-id'); if (!id) return;
+  if (typeof loadDetail === 'function') { ev.preventDefault(); loadDetail(Number(id)); }
+});
 
 async function loadDetail(dsid){
+  // 即时加载反馈, 避免点击后看起来无反应
+  $('main').innerHTML = '<div class="loading" style="padding:40px"><span class="spin"></span>正在加载数据集详情...</div>';
   let d;
   try {
     const r = await fetch('/api/datasets/' + dsid);
