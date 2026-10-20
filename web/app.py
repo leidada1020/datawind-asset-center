@@ -264,8 +264,9 @@ def api_lineage_graph(node: str = Query(..., min_length=1),
             up_map.setdefault(dsid, set()).add(db_table)
             down_map.setdefault(db_table, set()).add(dsid)
 
-        # 2. 定位起始节点
+        # 2. 定位起始节点（精确优先, 模糊兜底）
         start = None
+        matched_note = ""
         if node.isdigit():
             dsid = int(node)
             if dsid in up_map:
@@ -279,7 +280,31 @@ def api_lineage_graph(node: str = Query(..., min_length=1),
             if cand:
                 start = ("t", cand[0])
         if start is None:
-            return JSONResponse({"error": "未找到该表/数据集的血缘记录(可尝试数据集ID或 db.table 全名)"}, status_code=404)
+            # 模糊: 数据集名称 LIKE（取有血缘记录的首条）
+            dss = d.exec(
+                "SELECT dataset_id FROM etl.ods_datawind_dataset_s_d "
+                "WHERE dt=%s AND name LIKE %s ORDER BY dataset_id LIMIT 5",
+                (dt_s, "%%%s%%" % node), fetch=True)
+            for r in dss:
+                if r[0] in up_map:
+                    start = ("d", r[0])
+                    matched_note = "数据集名称模糊匹配"
+                    break
+        if start is None:
+            # 模糊: 表名/库名 LIKE（取有血缘记录的首条）
+            tabs = d.exec(
+                "SELECT db_name, table_name FROM etl.ods_doris_table_s_d "
+                "WHERE dt=%s AND (table_name LIKE %s OR db_name LIKE %s) "
+                "ORDER BY db_name, table_name LIMIT 5",
+                (dt_s, "%%%s%%" % node, "%%%s%%" % node), fetch=True)
+            for r in tabs:
+                t = "%s.%s" % (r[0], r[1])
+                if t in down_map:
+                    start = ("t", t)
+                    matched_note = "表名模糊匹配"
+                    break
+        if start is None:
+            return JSONResponse({"error": "未找到该表/数据集的血缘记录(支持数据集ID、db.table 全名、名称/表名模糊搜索)"}, status_code=404)
 
         # 3. 双向 BFS 收集节点与边
         nodes = {}   # id -> node dict
@@ -340,6 +365,7 @@ def api_lineage_graph(node: str = Query(..., min_length=1),
 
         # 4. 数据集节点补充 layer 占位(表节点layer已含)
         return {"start": start, "direction": direction, "depth": depth, "dt": dt_s,
+                "matched": matched_note,
                 "nodes": list(nodes.values()), "edges": edges,
                 "stats": {"tables": sum(1 for n in nodes.values() if n["kind"] == "table"),
                           "datasets": sum(1 for n in nodes.values() if n["kind"] == "dataset"),
@@ -402,9 +428,35 @@ def api_doris_layers():
         d.close()
 
 
+# ---------------- 模糊搜索建议(血缘页/目录输入框自动补全) ----------------
+@app.get("/api/search/suggest")
+def api_search_suggest(kw: str = Query(..., min_length=1), limit: int = Query(8, ge=1, le=20)):
+    d = get_doris()
+    try:
+        dt = latest_dt(d)
+        if not dt:
+            return JSONResponse({"error": "无快照数据"}, status_code=404)
+        dt_s = str(dt)
+        pat = "%%%s%%" % kw
+        dss = d.exec(
+            "SELECT dataset_id, name, folder_path FROM etl.ods_datawind_dataset_s_d "
+            "WHERE dt=%s AND name LIKE %s ORDER BY dataset_id LIMIT %s",
+            (dt_s, pat, limit), fetch=True)
+        tabs = d.exec(
+            "SELECT db_name, table_name, layer FROM etl.ods_doris_table_s_d "
+            "WHERE dt=%s AND (table_name LIKE %s OR table_comment LIKE %s OR db_name LIKE %s) "
+            "ORDER BY db_name, table_name LIMIT %s",
+            (dt_s, pat, pat, pat, limit), fetch=True)
+        return {"datasets": [{"id": r[0], "name": r[1], "folder": r[2] or ""} for r in dss],
+                "tables": [{"db": r[0], "table": r[1], "layer": r[2]} for r in tabs]}
+    finally:
+        d.close()
+
+
 # ---------------- 变更监控 ----------------
 @app.get("/api/changes")
-def api_changes(date: str = "", ctype: str = "", page: int = Query(1, ge=1), size: int = Query(50, ge=1, le=200)):
+def api_changes(date: str = "", ctype: str = "", keyword: str = "",
+                page: int = Query(1, ge=1), size: int = Query(50, ge=1, le=200)):
     d = get_doris()
     try:
         where = ["1=1"]
@@ -415,6 +467,9 @@ def api_changes(date: str = "", ctype: str = "", page: int = Query(1, ge=1), siz
         if ctype:
             where.append("change_type = %s")
             args.append(ctype)
+        if keyword:
+            where.append("(dataset_name LIKE %s OR dataset_id LIKE %s)")
+            args += ["%%%s%%" % keyword, "%%%s%%" % keyword]
         w = " AND ".join(where)
         cnt = d.exec("SELECT COUNT(*) FROM etl.dwd_datawind_dataset_change_i_d WHERE %s" % w, args, fetch=True)[0][0]
         off = (page - 1) * size

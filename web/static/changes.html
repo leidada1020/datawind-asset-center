@@ -16,6 +16,7 @@ main{padding:20px 24px;max-width:1200px;margin:0 auto;}
 .panel{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:16px 20px;margin-bottom:20px;}
 .filters{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;}
 .filters input,.filters select{border:1px solid var(--line);border-radius:6px;padding:7px 10px;font-size:13px;background:#fff;}
+.filters input#kw{width:220px;}
 table{width:100%;border-collapse:collapse;font-size:13px;}
 th{background:#f0f4f7;color:var(--sub);text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);}
 td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top;}
@@ -57,6 +58,7 @@ a{color:var(--main);text-decoration:none;} a:hover{text-decoration:underline;}
   <div class="panel">
     <h2>变更明细</h2>
     <div class="filters">
+      <input id="kw" placeholder="数据集名称/ID 模糊搜索">
       <input id="date" type="date" value="" placeholder="日期">
       <select id="type">
         <option value="">全部类型</option>
@@ -133,13 +135,14 @@ async function loadTrend(){
 }
 
 async function loadList(){
+  const kw = encodeURIComponent($('kw').value.trim());
   const date = $('date').value;
   const type = $('type').value;
   const btn = $('q');
   btn.disabled = true;
   $('tb').innerHTML = '<tr><td colspan="6" class="loading" style="padding:24px"><span class="spin"></span>正在加载变更明细...</td></tr>';
   try {
-    const d = await j(`/api/changes?date=${date}&ctype=${type}&page=${page}&size=50`);
+    const d = await j(`/api/changes?date=${date}&ctype=${type}&keyword=${kw}&page=${page}&size=50`);
     if (d.error) throw new Error(d.error);
     total = d.total; $('totalLabel').textContent = `共 ${total} 条`;
   $('pageLabel').textContent = `第 ${d.page} / ${Math.max(1, Math.ceil(total/d.size))} 页`;
@@ -159,6 +162,7 @@ async function loadList(){
 }
 
 $('q').onclick = () => { page = 1; loadList(); };
+$('kw').addEventListener('keydown', e => { if (e.key === 'Enter'){ page = 1; loadList(); }});
 $('prevBtn').onclick = () => { if (page > 1){ page--; loadList(); } };
 $('nextBtn').onclick = () => { if (page * 50 < total){ page++; loadList(); } };
 loadTrend(); loadList();
