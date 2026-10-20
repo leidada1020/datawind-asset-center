@@ -57,6 +57,32 @@ a{color:var(--main);text-decoration:none;} a:hover{text-decoration:underline;}
 .back-bar a.back:hover{border-color:var(--main);text-decoration:none;}
 .back-bar .crumb{font-size:13px;color:var(--sub);}
 .back-bar .crumb b{color:var(--text);font-weight:500;}
+.layout{display:flex;gap:20px;align-items:flex-start;}
+.layout main{flex:1;min-width:0;max-width:1440px;}
+.side{width:300px;flex-shrink:0;background:var(--card);border:1px solid var(--line);border-radius:8px;
+  padding:14px;position:sticky;top:14px;max-height:calc(100vh - 40px);overflow-y:auto;}
+.side h2{font-size:14px;margin-bottom:10px;}
+.modes{display:flex;gap:6px;margin-bottom:10px;}
+.modes button{flex:1;border:1px solid var(--line);background:#fff;border-radius:6px;padding:6px 0;
+  cursor:pointer;font-size:13px;color:var(--sub);}
+.modes button.active{background:var(--main);border-color:var(--main);color:#fff;}
+.sbar{display:flex;gap:6px;margin-bottom:10px;}
+.sbar input{flex:1;border:1px solid var(--line);border-radius:6px;padding:6px 10px;font-size:13px;min-width:0;}
+.sbar button{border:1px solid var(--line);background:#fff;border-radius:6px;padding:6px 12px;
+  cursor:pointer;font-size:13px;color:var(--sub);white-space:nowrap;}
+.sbar button:hover{color:var(--main);border-color:var(--main);}
+.tree{font-size:13px;}
+.tnode{display:flex;align-items:center;gap:6px;padding:5px 6px;border-radius:5px;cursor:pointer;color:var(--text);}
+.tnode:hover{background:#f0f7fa;}
+.tnode.sel{background:#e6f2f8;color:var(--main);font-weight:600;}
+.tnode .tw{width:10px;color:var(--sub);font-size:11px;flex-shrink:0;}
+.tnode .dot{width:10px;height:10px;border-radius:3px;flex-shrink:0;}
+.tnode .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.tnode .cnt{margin-left:auto;color:var(--sub);font-size:11px;flex-shrink:0;}
+.tchildren{margin-left:14px;border-left:1px dashed var(--line);padding-left:6px;}
+.side .empty{color:var(--sub);font-size:13px;padding:14px;}
+.sres{font-size:13px;}
+.sres .tt{color:var(--sub);font-size:12px;margin:6px 0 4px;}
 </style>
 </head>
 <body>
@@ -65,14 +91,167 @@ a{color:var(--main);text-decoration:none;} a:hover{text-decoration:underline;}
   <nav><a href="/" class="active">资产目录</a><a href="/lineage">血缘查询</a><a href="/changes">变更监控</a></nav>
   <span class="dt" id="title"><span class="spin" style="width:12px;height:12px;vertical-align:-2px"></span> 加载中...</span>
 </header>
+<div class="layout">
+<aside class="side">
+  <h2>资产导航</h2>
+  <div class="modes">
+    <button id="mLayer" class="active" onclick="switchMode('layer')">数仓分层</button>
+    <button id="mFolder" onclick="switchMode('folder')">数据集目录</button>
+  </div>
+  <div class="sbar">
+    <input id="kw" placeholder="搜索数据集名称/ID">
+    <button onclick="doSearch()">搜索</button>
+  </div>
+  <div id="treeWrap">
+    <div class="tree" id="tree"><div class="loading"><span class="spin"></span>正在加载资产导航...</div></div>
+  </div>
+  <div class="sres" id="searchRes" style="display:none"></div>
+</aside>
 <main id="main"><div class="loading"><span class="spin"></span>正在加载数据集详情...</div></main>
+</div>
 <script>
 const $ = id => document.getElementById(id);
-const dsid = parseInt(location.pathname.split('/')[2]);
+const LAYER_ORDER = ['mv','ods','dwd','dim','dws','ads','tmp','fin','other'];
 const LAYER_COLOR = {mv:'#2b6cb0',ods:'#2f855a',dwd:'#805ad5',dim:'#319795',dws:'#c05621',ads:'#c53030',tmp:'#718096',fin:'#234e70',other:'#8a7b60'};
 const DCOLOR = '#d97706';
 function esc(s){ return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function trim(s, n){ return String(s).length > n ? String(s).slice(0, n) + '…' : s; }
+function errHtml(msg){ return `<div class="err-box">加载失败: ${esc(msg)} <button onclick="location.reload()">重试</button></div>`; }
 async function j(url){ const r = await fetch(url); return r.json(); }
+function getDsid(){ return parseInt(location.pathname.split('/')[2]) || 0; }
+
+/* ---------------- 左侧资产导航(树 + 搜索), 点击直接切换详情 ---------------- */
+let mode = 'layer', layerTree = [], folderTree = [];
+let openLayer = '', openDb = '', openFolder = '', curDsid = 0;
+const dbCache = {}, folderCache = {};
+
+async function loadTrees(){
+  $('tree').innerHTML = '<div class="loading"><span class="spin"></span>正在加载资产导航...</div>';
+  try {
+    const [l, f] = await Promise.all([j('/api/doris/layers'), j('/api/folder_tree')]);
+    layerTree = l; folderTree = f;
+    renderTree();
+  } catch(e){ $('tree').innerHTML = errHtml(e.message); }
+}
+
+function renderTree(){
+  const t = $('tree');
+  if (mode === 'layer'){
+    const byLayer = {};
+    layerTree.forEach(x => (byLayer[x.layer] = byLayer[x.layer] || []).push(x));
+    const layers = LAYER_ORDER.filter(l => byLayer[l]).concat(
+      Object.keys(byLayer).filter(l => !LAYER_ORDER.includes(l)).sort());
+    let h = '';
+    layers.forEach(l => {
+      const dbs = byLayer[l].sort((a,b) => a.db.localeCompare(b.db));
+      const cnt = dbs.reduce((s,x) => s + x.cnt, 0);
+      h += `<div class="tnode" onclick="toggleLayer('${l}')">
+        <span class="tw">${openLayer === l ? '▾' : '▸'}</span>
+        <span class="dot" style="background:${LAYER_COLOR[l] || '#8a7b60'}"></span>
+        <span class="nm">${esc(l)}</span><span class="cnt">${cnt}</span></div>`;
+      if (openLayer === l){
+        h += '<div class="tchildren">' + dbs.map(x =>
+          `<div class="tnode" onclick="toggleDb('${esc(x.db)}')">
+            <span class="tw">${openDb === x.db ? '▾' : '▸'}</span>
+            <span class="nm">${esc(x.db)}</span><span class="cnt">${x.cnt}</span></div>
+           ${openDb === x.db ? '<div class="tchildren" data-db="' + esc(x.db) + '"><div class="loading" style="padding:8px"><span class="spin"></span></div></div>' : ''}`).join('') + '</div>';
+      }
+    });
+    t.innerHTML = h || '<div class="empty">暂无分层数据</div>';
+    if (openDb) fillDbTables(openDb);
+  } else {
+    const byId = {}; folderTree.items.forEach(f => byId[f.id] = f);
+    const kids = id => folderTree.items.filter(f => f.parent === id);
+    const rootKids = folderTree.items.filter(f => !f.parent || f.parent === 0 || f.parent === null);
+    function nodeHtml(f){
+      const children = kids(f.id);
+      const open = openFolder === f.path;
+      return `<div class="tnode" onclick="toggleFolder('${esc(f.path)}')">
+          <span class="tw">${children.length ? (open ? '▾' : '▸') : ''}</span>
+          <span class="nm">${esc(f.name)}</span><span class="cnt">${f.cnt || ''}</span></div>
+        ${open ? '<div class="tchildren" data-folder="' + esc(f.path) + '"><div class="loading" style="padding:8px"><span class="spin"></span></div></div>' : ''}`;
+    }
+    const allOpen = openFolder === '';
+    let h = `<div class="tnode ${allOpen ? 'sel' : ''}" onclick="toggleFolder('')">
+      <span class="tw">${allOpen ? '▾' : '▸'}</span><span class="nm">全部数据集</span>
+      <span class="cnt">${folderTree.total || ''}</span></div>
+      ${allOpen ? '<div class="tchildren" data-folder=""><div class="loading" style="padding:8px"><span class="spin"></span></div></div>' : ''}`;
+    h += rootKids.map(nodeHtml).join('');
+    t.innerHTML = h;
+    // 懒加载已展开的数据集列表
+    const box = t.querySelector('[data-folder="' + CSS.escape(openFolder) + '"]');
+    if (box && !box.dataset.loaded) fillFolderDatasets(openFolder, box);
+  }
+}
+
+async function fillDbTables(db){
+  const box = document.querySelector('#tree [data-db="' + CSS.escape(db) + '"]');
+  if (!box || box.dataset.loaded) return;
+  box.dataset.loaded = '1';
+  if (dbCache[db] != null){ box.innerHTML = dbCache[db]; return; }
+  try {
+    const d = await j('/api/doris/tables?db=' + encodeURIComponent(db) + '&size=1000');
+    dbCache[db] = (d.items || []).map(x =>
+      `<div class="tnode" onclick="location='/lineage?node=' + encodeURIComponent('${esc(x.db)}.${esc(x.table)}')">
+        <span class="tw"></span><span class="nm">${esc(x.table)}</span><span class="cnt">${x.rows ?? ''}</span></div>`).join('')
+      || '<div class="empty">无表</div>';
+    box.innerHTML = dbCache[db];
+  } catch(e){ box.innerHTML = '<div class="empty">加载失败</div>'; }
+}
+
+async function fillFolderDatasets(p, box){
+  if (box.dataset.loaded) return;
+  box.dataset.loaded = '1';
+  if (folderCache[p] != null){ box.innerHTML = folderCache[p]; return; }
+  try {
+    const d = await j('/api/datasets?folder=' + encodeURIComponent(p) + '&size=500');
+    if (d.error) throw new Error(d.error);
+    folderCache[p] = (d.items || []).map(x =>
+      `<div class="tnode ${x.dataset_id === curDsid ? 'sel' : ''}" onclick="loadDetail(${x.dataset_id})">
+        <span class="tw"></span><span class="nm">${esc(x.name)}</span><span class="cnt">${x.dataset_id}</span></div>`).join('')
+      || '<div class="empty">无数据集</div>';
+    box.innerHTML = folderCache[p];
+  } catch(e){ box.innerHTML = '<div class="empty">加载失败</div>'; }
+}
+
+function toggleLayer(l){
+  openLayer = openLayer === l ? '' : l; openDb = '';
+  renderTree();
+}
+function toggleDb(db){
+  openLayer = openLayer;
+  openDb = openDb === db ? '' : db;
+  renderTree();
+}
+function toggleFolder(p){
+  openFolder = openFolder === p ? '' : p;
+  renderTree();
+}
+function switchMode(m){
+  mode = m; openLayer = ''; openDb = ''; openFolder = '';
+  $('mLayer').classList.toggle('active', m === 'layer');
+  $('mFolder').classList.toggle('active', m === 'folder');
+  renderTree();
+}
+
+async function doSearch(){
+  const kw = $('kw').value.trim();
+  const box = $('searchRes');
+  if (!kw){ box.style.display = 'none'; $('treeWrap').style.display = ''; return; }
+  $('treeWrap').style.display = 'none';
+  box.style.display = '';
+  box.innerHTML = '<div class="loading" style="padding:16px"><span class="spin"></span>正在搜索...</div>';
+  try {
+    const d = await j('/api/datasets?keyword=' + encodeURIComponent(kw) + '&size=50');
+    if (d.error) throw new Error(d.error);
+    box.innerHTML = '<div class="tt">搜索结果 (共 ' + d.total + '):</div>' +
+      (d.items || []).map(x =>
+        `<div class="tnode ${x.dataset_id === curDsid ? 'sel' : ''}" onclick="loadDetail(${x.dataset_id})">
+          <span class="tw"></span><span class="nm">${esc(x.name)}</span><span class="cnt">${x.dataset_id}</span></div>`).join('')
+      || '<div class="empty">无匹配数据集</div>';
+  } catch(e){ box.innerHTML = errHtml(e.message); }
+}
+$('kw').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
 
 /* ---------------- 树状血缘图: 数据集(右) <- hop1直接上游(中) <- hop2调度生产来源(左) ---------------- */
 function renderLineageTree(t){
@@ -166,12 +345,13 @@ function renderLineageTree(t){
   return svg;
 }
 
-$('lineage-svg-wrap') && document.addEventListener('click', ev => {
+// 点击血缘图中的表节点 -> 打开完整血缘
+document.addEventListener('click', ev => {
   const g = ev.target.closest('.lnode'); if (!g) return;
   window.open('/lineage?node=' + encodeURIComponent(g.dataset.q), '_blank');
 });
 
-async function load(){
+async function loadDetail(dsid){
   let d;
   try {
     const r = await fetch('/api/datasets/' + dsid);
@@ -253,9 +433,25 @@ async function load(){
     </div>
     <div class="panel"><h2>加工 SQL</h2><pre>${esc(d.sql_logic || '（无加工SQL / 直连）')}</pre></div>
     <div class="panel"><h2>变更历史</h2><ul class="changes">${ch}</ul></div>`;
+
+  // 更新当前选中态 + URL(便于刷新/分享)
+  curDsid = dsid;
+  const p = '/dataset/' + dsid;
+  if (location.pathname !== p) history.pushState(null, '', p);
+  $('title').textContent = `${esc(d.name)} (${d.dataset_id})`;
+  // 刷新左侧树高亮
+  renderTree();
+  if ($('searchRes').style.display !== 'none') doSearch();
 }
 
-load();
+// 浏览器前进/后退时按 URL 切换详情
+window.addEventListener('popstate', () => {
+  const id = getDsid();
+  if (id && id !== curDsid) loadDetail(id);
+});
+
+loadTrees();
+loadDetail(getDsid());
 </script>
 </body>
 </html>
