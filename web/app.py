@@ -237,7 +237,8 @@ def api_dataset_detail(dsid: int):
         info["field_lineage"] = []
         for r in fc:
             t, st, sf, conf = r[0], r[1] or "", r[2] or "", r[3]
-            if conf == "pending" or (not st and not sf):
+            if conf == "pending" or not st:
+                # 过滤 pending / 来源表为空(无法归属到具体表的解析噪音) / 通配符* / 纯数字索引(常量列)
                 continue
             if t == "*" or (t and t.isdigit()):
                 continue
