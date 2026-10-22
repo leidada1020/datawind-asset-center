@@ -102,6 +102,16 @@ class Doris:
 
     # ---------- 建表 ----------
     def create_table(self, ddl):
+        """建表(幂等): 目标表已存在则跳过 CREATE, 避免只读账号无 CREATE 权限时启动即报错"""
+        import re
+        m = re.search(r"CREATE TABLE IF NOT EXISTS\s+`?(\w+)`?\.`?(\w+)`?", ddl, re.IGNORECASE)
+        if m:
+            db_, tbl = m.group(1), m.group(2)
+            rows = self.exec(
+                "SELECT COUNT(*) FROM information_schema.tables "
+                "WHERE table_schema=%s AND table_name=%s", (db_, tbl), fetch=True)
+            if rows and rows[0] and rows[0][0] > 0:
+                return
         self.exec(ddl)
 
     def table_exists(self, table):

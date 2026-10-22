@@ -6,8 +6,8 @@
   "proxy_user": "REPLACE_WITH_PROXY_USER",
   "expire": 3600,
   "app_id": 20074764,
-  "doris_host": "203.123.86.71",
-  "doris_port": 9030,
+  "doris_host": "165.56.70.74",
+  "doris_port": 39030,
   "doris_user": "pl",
   "doris_password": "REPLACE_WITH_REAL_DORIS_PASSWORD",
   "doris_db": "etl"
