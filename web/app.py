@@ -244,6 +244,13 @@ def api_dataset_detail(dsid: int):
                 continue
             info["field_lineage"].append({"target": t, "business": biz_map.get(t, ""),
                                           "src_table": st, "src_field": sf, "conf": conf})
+        # 维度指标定义(dimMet): 数据集指标/维度清单含计算表达式, 展示指标口径
+        md = d.exec("SELECT name, dim_met_variety, expr, field_list, data_type, dim_met_order "
+                    "FROM etl.ods_datawind_dimmet_s_d WHERE dt=%s AND dataset_id=%s "
+                    "ORDER BY dim_met_order, name", (dt, dsid), fetch=True)
+        info["metric_defs"] = [{"name": r[0], "variety": r[1], "expr": r[2] or "",
+                                "fields": r[3] or "", "type": r[4] or "",
+                                "order": r[5]} for r in md]
         # 变更历史(该数据集)
         ch = d.exec("SELECT dt, change_type, change_type_name, changed_fields, diff_json, remark FROM etl.dwd_datawind_dataset_change_i_d WHERE dataset_id=%s ORDER BY dt DESC, change_id DESC LIMIT 20", (dsid,), fetch=True)
         info["change_history"] = [{"dt": str(r[0]), "type": r[1], "type_name": r[2], "fields": r[3], "diff": r[4], "remark": r[5]} for r in ch]

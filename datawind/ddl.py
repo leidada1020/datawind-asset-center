@@ -339,3 +339,38 @@ PROPERTIES (
     "replication_num" = "2"
 )
 """
+
+DDL_DIMMET = """
+CREATE TABLE IF NOT EXISTS {db}.ods_datawind_dimmet_s_d (
+    dt                  DATE         NOT NULL COMMENT '统计日期(分区)',
+    dataset_id          BIGINT       NOT NULL COMMENT '数据集ID',
+    dimmet_id           BIGINT       NOT NULL COMMENT '维度指标ID(dimMet.id)',
+    name                VARCHAR(255) COMMENT '指标/维度名(name, 如 累计还款率)',
+    dim_met_variety     INT          COMMENT '类型: 2=指标(度量) 0=维度(其他值按dimMetVariety原样)',
+    expr                VARCHAR(1000) COMMENT '计算表达式(fullExpr, 如 sum(`tt_rece`)/sum(`accru_due_receivable`))',
+    field_list          VARCHAR(1000) COMMENT '公式引用的基础字段JSON(fieldList)',
+    data_type           VARCHAR(32)  COMMENT '数据类型(dataTypeName: float/int/string/date等)',
+    dim_met_order       INT          COMMENT '数据集内排序(dimMetOrder)',
+    descr               VARCHAR(255) COMMENT '描述(descr)',
+    editable            INT          COMMENT '是否可编辑(1=可编辑)',
+    status              INT          COMMENT '状态(status)',
+    visible             INT          COMMENT '是否可见(1=可见)',
+    filter_type         VARCHAR(32)  COMMENT '筛选类型(filterType)',
+    map_type            INT          COMMENT '映射类型(mapType)',
+    is_partition_field  INT          COMMENT '是否分区字段(1=是)',
+    etl_time            DATETIME     NOT NULL COMMENT '采集时间'
+) ENGINE=OLAP
+UNIQUE KEY(dt, dataset_id, dimmet_id)
+COMMENT 'DataWind数据集维度指标定义每日快照(s_d): dimMet接口返回的维度/指标完整定义(名称/计算表达式/引用基础字段/类型), 支持指标口径盘点与字段血缘解释; dt分区+etl_time, 重跑先删当日分区再全量'
+PARTITION BY RANGE(dt) ()
+DISTRIBUTED BY HASH(dataset_id) BUCKETS 8
+PROPERTIES (
+    "dynamic_partition.enable" = "true",
+    "dynamic_partition.time_unit" = "DAY",
+    "dynamic_partition.start" = "-30",
+    "dynamic_partition.end" = "3",
+    "dynamic_partition.prefix" = "p",
+    "dynamic_partition.replication_num" = "2",
+    "replication_num" = "2"
+)
+"""

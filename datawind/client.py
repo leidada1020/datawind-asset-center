@@ -158,6 +158,19 @@ class DataWindClient:
                 json.dumps(fields, ensure_ascii=False),
                 data_source)
 
+    # ---------- 维度指标 ----------
+    def dim_met(self, dsid):
+        """数据集维度指标定义(dimMet): 返回 dimMetList 完整列表
+        含指标名(name)/计算表达式(fullExpr)/引用基础字段(fieldList)/类型(dimMetVariety: 2=指标)
+        供每日全量落 ods_datawind_dimmet_s_d; 单接口失败返回 []（不中断批量）"""
+        try:
+            r = self.http_json("/api/v4/open/dataset/%d/dimMet" % dsid, timeout=60)
+        except Exception:
+            return []
+        data = r.get("data") or {}
+        dims = data.get("dimMetList") or []
+        return dims if isinstance(dims, list) else []
+
     # ---------- 并发批量 ----------
     def batch_fetch(self, ids, fetch_fn, max_workers=8):
         """并发抓取，单项失败返回 None/{}（不中断整体）"""

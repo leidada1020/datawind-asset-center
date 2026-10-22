@@ -40,6 +40,7 @@ TBL_TBL_LINEAGE = "{db}.dwd_datawind_table_lineage_t_d"
 TBL_COL_LINEAGE = "{db}.dwd_datawind_column_lineage_t_d"
 TBL_PARSE_STAT = "{db}.dwd_datawind_parse_stat_s_d"
 TBL_CLOSURE = "{db}.dwd_datawind_lineage_closure_t_d"
+TBL_DIMMET = "{db}.ods_datawind_dimmet_s_d"
 DDL_FOLDER = ddl_mod.DDL_FOLDER
 
 
@@ -225,7 +226,8 @@ def main():
     doris.create_table(ddl_mod.DDL_DORIS_COLUMN.format(db=doris.db))
     doris.create_table(ddl_mod.DDL_DS_WORKFLOW.format(db=doris.db))
     doris.create_table(ddl_mod.DDL_DS_LINEAGE.format(db=doris.db))
-    print("==> 表已就绪: 快照/变更/文件夹/表血缘/字段血缘/解析统计/闭包/Doris表资产/Doris字段资产/DS调度资产/DS表间血缘")
+    doris.create_table(ddl_mod.DDL_DIMMET.format(db=doris.db))
+    print("==> 表已就绪: 快照/变更/文件夹/表血缘/字段血缘/解析统计/闭包/Doris表资产/Doris字段资产/DS调度资产/DS表间血缘/DataWind维度指标")
 
     # 文件夹树快照写入
     etl_time = time.strftime("%Y-%m-%d %H:%M:%S", _local_now())
@@ -378,6 +380,42 @@ def main():
             print("    DS 采集未启用(配置 ds.enabled 缺失或 false), 跳过")
     except Exception as e:
         print("    [警告] DS 调度资产采集失败(不影响主流程): %s" % e)
+
+    # DataWind 维度指标采集（每日全量, 独立 try 不影响主流程; 并发调 dimMet 接口）
+    try:
+        print("==> 采集 DataWind 维度指标(dimMet) ...")
+        dim_map = client.batch_fetch(ids, lambda i: client.dim_met(i))
+        doris.exec("DELETE FROM %s WHERE dt = %%s" % TBL_DIMMET.format(db=doris.db), (stat_date,))
+        dm_cols = ["dt", "dataset_id", "dimmet_id", "name", "dim_met_variety",
+                   "expr", "field_list", "data_type", "dim_met_order", "descr", "editable",
+                   "status", "visible", "filter_type", "map_type", "is_partition_field",
+                   "etl_time"]
+        dm_ph = ",".join(["%s"] * len(dm_cols))
+        dm_sql = "INSERT INTO %s (%s) VALUES (%s)" % (TBL_DIMMET.format(db=doris.db),
+                                                      ",".join(dm_cols), dm_ph)
+        dm_rows = []
+        for i, dims in dim_map.items():
+            for m in dims or []:
+                if not isinstance(m, dict):
+                    continue
+                dm_rows.append(tuple([stat_date, i,
+                                      m.get("id") or 0, m.get("name") or "",
+                                      m.get("dimMetVariety"), m.get("fullExpr") or m.get("expr"),
+                                      m.get("fieldList"), m.get("dataTypeName"),
+                                      m.get("dimMetOrder"), m.get("descr"),
+                                      m.get("editable"), m.get("status"),
+                                      m.get("visible"), m.get("filterType"),
+                                      m.get("mapType"), m.get("isPartitionField"),
+                                      etl_time]))
+        if dm_rows:
+            doris.execmany(dm_sql, dm_rows)
+        dim_cnt = doris.count(TBL_DIMMET.format(db=doris.db), "dt=%s", (stat_date,))
+        metric_cnt = doris.count(TBL_DIMMET.format(db=doris.db), "dt=%s AND dim_met_variety=2",
+                                 (stat_date,))
+        print("    DataWind 维度指标: 数据集=%d 条目=%d(其中指标variety=2: %d) (dt=%s)"
+              % (len([i for i, v in dim_map.items() if v]), dim_cnt, metric_cnt, stat_date))
+    except Exception as e:
+        print("    [警告] DataWind 维度指标采集失败(不影响主流程): %s" % e)
 
     # 校验
     cnt = doris.count(TBL_SNAPSHOT.format(db=doris.db), "dt=%s", (stat_date,))
