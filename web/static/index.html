@@ -100,30 +100,37 @@ a.ds:hover{text-decoration:underline;}
         <span class="item"><span class="dot" style="background:#8a7b60"></span>other</span>
       </div>
       <div class="tree" id="tree"><div class="loading"><span class="spin"></span>正在加载资产导航...</div></div>
+
+      <div id="sideFilters" style="display:none;border-top:1px solid var(--line);margin-top:12px;padding-top:12px;">
+        <h2 style="font-size:14px;margin-bottom:8px;">数据集筛选</h2>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <select id="dsType" style="border:1px solid var(--line);border-radius:6px;padding:7px 10px;background:#fff;">
+            <option value="">全部类型</option><option value="22">prep 数据集</option>
+            <option value="32">直连数据集</option><option value="100">ClickHouse CDW</option>
+          </select>
+          <select id="dsStatus" style="border:1px solid var(--line);border-radius:6px;padding:7px 10px;background:#fff;">
+            <option value="">全部状态</option><option value="0">正常</option>
+            <option value="1">彻底删除</option><option value="2">回收站</option>
+          </select>
+          <select id="dsSource" style="border:1px solid var(--line);border-radius:6px;padding:7px 10px;background:#fff;">
+            <option value="">全部数据源</option><option value="doris">Doris</option>
+            <option value="Doris_非洲">Doris_非洲</option><option value="mysql">MySQL</option>
+            <option value="bytehouse_cdw_engine">ByteHouse</option><option value="lark_sheet">Lark Sheet</option>
+            <option value="cdw_excel">CDW Excel</option><option value="cdw_csv">CDW CSV</option>
+          </select>
+          <select id="dsFreq" style="border:1px solid var(--line);border-radius:6px;padding:7px 10px;background:#fff;">
+            <option value="">全部调度</option><option value="daily">按天</option>
+            <option value="hourly">按小时</option><option value="every_ten_minutes">每10分钟</option>
+          </select>
+          <button id="clearF" style="border:1px solid var(--line);background:#fff;border-radius:6px;padding:6px 10px;cursor:pointer;color:var(--sub);font-size:13px;">清除筛选</button>
+        </div>
+      </div>
     </div>
 
     <div class="content">
       <div class="filters">
         <span class="crumb" id="crumb"></span>
         <input id="kw" placeholder="搜索名称/ID/表名">
-        <select id="dsType" style="display:none;border:1px solid var(--line);border-radius:6px;padding:7px 10px;background:#fff;">
-          <option value="">全部类型</option><option value="22">prep 数据集</option>
-          <option value="32">直连数据集</option><option value="100">ClickHouse CDW</option>
-        </select>
-        <select id="dsStatus" style="display:none;border:1px solid var(--line);border-radius:6px;padding:7px 10px;background:#fff;">
-          <option value="">全部状态</option><option value="0">正常</option>
-          <option value="1">彻底删除</option><option value="2">回收站</option>
-        </select>
-        <select id="dsSource" style="display:none;border:1px solid var(--line);border-radius:6px;padding:7px 10px;background:#fff;">
-          <option value="">全部数据源</option><option value="doris">Doris</option>
-          <option value="Doris_非洲">Doris_非洲</option><option value="mysql">MySQL</option>
-          <option value="bytehouse_cdw_engine">ByteHouse</option><option value="lark_sheet">Lark Sheet</option>
-          <option value="cdw_excel">CDW Excel</option><option value="cdw_csv">CDW CSV</option>
-        </select>
-        <select id="dsFreq" style="display:none;border:1px solid var(--line);border-radius:6px;padding:7px 10px;background:#fff;">
-          <option value="">全部调度</option><option value="daily">按天</option>
-          <option value="hourly">按小时</option><option value="every_ten_minutes">每10分钟</option>
-        </select>
         <button id="searchBtn" style="border:1px solid var(--line);background:#fff;border-radius:6px;padding:7px 16px;cursor:pointer;">查询</button>
         <span style="margin-left:auto;font-size:13px;color:var(--sub);" id="totalLabel"></span>
       </div>
@@ -260,9 +267,8 @@ function switchMode(m){
   $('mLayer').classList.toggle('active', m === 'layer');
   $('mFolder').classList.toggle('active', m === 'folder');
   $('kw').value = ''; page = 1;
-  // 数据集目录模式显示数据集筛选(类型/状态/数据源/调度)
-  for (const id of ['dsType','dsStatus','dsSource','dsFreq'])
-    $(id).style.display = m === 'folder' ? '' : 'none';
+  // 数据集筛选面板仅在数据集目录模式显示
+  $('sideFilters').style.display = m === 'folder' ? '' : 'none';
   setTh(m); renderTree(); renderCrumb(); loadList();
 }
 
@@ -365,6 +371,10 @@ $('searchBtn').onclick = () => { page = 1; loadList(); };
 $('kw').addEventListener('keydown', e => { if (e.key === 'Enter'){ page = 1; loadList(); }});
 for (const id of ['dsType','dsStatus','dsSource','dsFreq'])
   $(id).addEventListener('change', () => { page = 1; loadList(); });
+$('clearF').onclick = () => {
+  for (const id of ['dsType','dsStatus','dsSource','dsFreq']) $(id).value = '';
+  page = 1; loadList();
+};
 $('prevBtn').onclick = () => { if (page > 1){ page--; loadList(); } };
 $('nextBtn').onclick = () => { if (page * 20 < total){ page++; loadList(); } };
 
@@ -395,8 +405,7 @@ function restoreState(){
   page = Math.max(1, s.page || 1);
   $('mLayer').classList.toggle('active', mode === 'layer');
   $('mFolder').classList.toggle('active', mode === 'folder');
-  for (const id of ['dsType','dsStatus','dsSource','dsFreq'])
-    $(id).style.display = mode === 'folder' ? '' : 'none';
+  $('sideFilters').style.display = mode === 'folder' ? '' : 'none';
   return true;
 }
 // 点击详情链接(数据集/表/变更)前记忆当前目录状态

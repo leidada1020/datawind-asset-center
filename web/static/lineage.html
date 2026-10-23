@@ -45,6 +45,8 @@ main{padding:16px 24px;max-width:1440px;margin:0 auto;}
 #detail li{font-size:12px;padding:4px 0;border-bottom:1px dashed var(--line);color:var(--sub);word-break:break-all;}
 #detail li b{color:var(--text);}
 #detail a{color:var(--main);}
+#detail .focus-btn{border:1px solid var(--main);background:#fff;color:var(--main);border-radius:6px;padding:5px 12px;font-size:12px;cursor:pointer;margin-top:2px;}
+#detail .focus-btn:hover{background:var(--main);color:#fff;}
 #detail .close{float:right;cursor:pointer;color:var(--sub);font-size:16px;border:none;background:none;}
 #detail .sec{font-size:12px;color:var(--sub);margin-top:10px;font-weight:600;}
 .legend{display:flex;gap:14px;flex-wrap:wrap;align-items:center;font-size:12px;color:var(--sub);}
@@ -133,6 +135,7 @@ const X_GAP = 300, Y_GAP = 74, NODE_H = 34, NODE_W_MIN = 132, NODE_W_MAX = 264, 
 let graph = null, layers = {}, pos = {}, scale = 1, tx = 0, ty = 0;
 let W0 = 0, H0 = 0; // 画布逻辑尺寸
 let querying = false;
+let adj = {}; // 无向邻居表(供高亮/寻径)
 
 const ov = () => $('graph-ov'), gempty = () => $('graph-empty');
 function showLoading(on, msg){
@@ -256,7 +259,7 @@ function render(){
     const x1 = a.x + wa / 2, y1 = a.y;
     const x2 = b.x - wb / 2, y2 = b.y;
     const dx = Math.max(40, (x2 - x1) * 0.5);
-    html += `<path d="M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}" fill="none" stroke="#94a3b8" stroke-width="1.3" marker-end="url(#arr)"/>`;
+    html += `<path class="edge" data-key="${key}" d="M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}" fill="none" stroke="#94a3b8" stroke-width="1.3" marker-end="url(#arr)"/>`;
   }
   html += `</g>`;
 
@@ -321,20 +324,101 @@ async function query(){
     return;
   }
   graph = d; pos = {};
+  adj = {};
+  graph.edges.forEach(e => {
+    (adj[e.from] = adj[e.from] || []).push(e.to);
+    (adj[e.to] = adj[e.to] || []).push(e.from);
+  });
   gempty().style.display = 'none';
   const st = d.stats;
-  $('stat').innerHTML = `共 <b>${st.tables}</b> 张表 / <b>${st.datasets}</b> 个数据集 / <b>${st.edges}</b> 条血缘边 · ${d.direction === 'both' ? '双向' : d.direction === 'down' ? '仅下游' : '仅上游'} ${d.depth} 跳 · 起点居中, 上游向左下游向右, 滚轮缩放/拖拽平移${d.matched ? ' · <span style="color:#d97706">' + d.matched + '</span>' : ''}`;
+  $('stat').innerHTML = `共 <b>${st.tables}</b> 张表 / <b>${st.datasets}</b> 个数据集 / <b>${st.edges}</b> 条血缘边 · ${d.direction === 'both' ? '双向' : d.direction === 'down' ? '仅下游' : '仅上游'} ${d.depth} 跳 · 悬停节点高亮邻居, 点击查看路径, 双击/按钮聚焦该节点${d.matched ? ' · <span style="color:#d97706">' + d.matched + '</span>' : ''}`;
   fit();
   querying = false; $('q').disabled = false;
 }
 
-// 节点点击 -> 详情卡
+// ---------- DataHub 式交互: hover 邻居高亮 / 点击路径高亮 / 聚焦重查 ----------
+const startIdOf = () => graph.start[0] === 't' ? 't:' + graph.start[1] : 'd:' + graph.start[1];
+
+function applyDim(keepNodes, keepEdges){
+  const N = keepNodes || new Set(), E = keepEdges || new Set();
+  document.querySelectorAll('#graph .node').forEach(g => {
+    g.style.opacity = N.has(g.dataset.id) ? 1 : 0.12;
+  });
+  document.querySelectorAll('#graph .edge').forEach(p => {
+    p.style.opacity = E.has(p.dataset.key) ? 1 : 0.1;
+  });
+}
+function resetDim(){
+  document.querySelectorAll('#graph .node').forEach(g => { g.style.opacity = 1; });
+  document.querySelectorAll('#graph .edge').forEach(p => { p.style.opacity = 1; });
+}
+function edgeKey(a, b){ return a < b ? a + '|' + b : b + '|' + a; }
+
+// hover 邻居高亮
+$('graph').addEventListener('mouseover', ev => {
+  const g = ev.target.closest('.node'); if (!g) return;
+  const id = g.dataset.id;
+  const keepN = new Set([id, ...(adj[id] || [])]);
+  const keepE = new Set((adj[id] || []).map(v => edgeKey(id, v)));
+  applyDim(keepN, keepE);
+});
+$('graph').addEventListener('mouseout', ev => {
+  const g = ev.target.closest('.node'); if (!g) return;
+  const rel = ev.relatedTarget;
+  if (rel && rel.closest && rel.closest('.node')) return; // 仍在节点内(子元素间移动)
+  resetDim();
+});
+
+// 起点 -> 节点 最短路径(无向BFS)
+function shortestPath(from, to){
+  if (from === to) return [from];
+  const prev = {}, seen = new Set([from]), q = [from];
+  while (q.length){
+    const u = q.shift();
+    for (const v of (adj[u] || [])){
+      if (seen.has(v)) continue;
+      seen.add(v); prev[v] = u;
+      if (v === to){
+        const path = [v]; let cur = v;
+        while (cur !== from){ cur = prev[cur]; path.push(cur); }
+        return path.reverse();
+      }
+      q.push(v);
+    }
+  }
+  return null;
+}
+
+// 点击节点: 详情卡 + 起点到该节点的路径高亮
 $('graph').addEventListener('click', ev => {
   const g = ev.target.closest('.node'); if (!g) return;
   const id = g.dataset.id;
   const nd = graph.nodes.find(x => x.id === id); if (!nd) return;
+  // 高亮起点->节点 路径
+  const startId = startIdOf();
+  const path = shortestPath(startId, id);
+  if (path && path.length > 1){
+    const keepN = new Set(path);
+    const keepE = new Set();
+    for (let i = 0; i < path.length - 1; i++) keepE.add(edgeKey(path[i], path[i + 1]));
+    applyDim(keepN, keepE);
+  }
   showDetail(nd);
 });
+// 双击节点: 聚焦该节点(以其为中心 双向1跳重查)
+$('graph').addEventListener('dblclick', ev => {
+  const g = ev.target.closest('.node'); if (!g) return;
+  refocus(g.dataset.id);
+});
+
+// 以某节点为中心重新查询
+function refocus(id){
+  const nd = graph.nodes.find(x => x.id === id); if (!nd) return;
+  $('node').value = nd.kind === 'table' ? (nd.db + '.' + nd.table) : String(nd.dataset_id);
+  $('dir').value = 'both'; $('depth').value = '1';
+  $('detail').style.display = 'none';
+  query();
+}
 
 function showDetail(nd){
   const box = $('detail');
@@ -349,6 +433,7 @@ function showDetail(nd){
     else inner += `<div class="sec">上游</div><div class="empty" style="padding:8px">该表为数据源头, 无上游生产逻辑</div>`;
     inner += `<div class="sec">下游数据集 (${ds.length})</div>`;
     inner += ds.length ? `<ul>` + ds.map(n => `<li><a href="/dataset/${n.dataset_id}">${esc(n.name)}</a> <span style="color:#94a3b8">#${n.dataset_id}</span></li>`).join('') + '</ul>' : '<div class="empty" style="padding:8px">暂无下游消费</div>';
+    inner += `<div class="sec"><button class="focus-btn" data-id="${esc(nd.id)}">以此节点为中心(双向1跳)</button></div>`;
   } else {
     inner += `<span class="tag" style="background:${DCOLOR}">数据集</span>`;
     inner += `<h3>${esc(nd.name)} <span style="color:#94a3b8;font-size:12px">#${nd.dataset_id}</span></h3>`;
@@ -357,11 +442,16 @@ function showDetail(nd){
     inner += `<div class="sec">上游表 (${ups.length})</div>`;
     inner += ups.length ? `<ul>` + ups.map(n => `<li>${esc(n.db)}.${esc(n.table)}</li>`).join('') + '</ul>' : '<div class="empty" style="padding:8px">无上游表</div>';
     inner += `<div class="sec"><a href="/dataset/${nd.dataset_id}">查看数据集详情 →</a></div>`;
+    inner += `<div class="sec"><button class="focus-btn" data-id="${esc(nd.id)}">以此节点为中心(双向1跳)</button></div>`;
   }
   box.innerHTML = `<button class="close">×</button>${inner}`;
   box.style.display = 'block';
 }
-$('detail').addEventListener('click', ev => { if (ev.target.classList.contains('close')) $('detail').style.display = 'none'; });
+$('detail').addEventListener('click', ev => {
+  if (ev.target.classList.contains('close')) $('detail').style.display = 'none';
+  const fb = ev.target.closest('.focus-btn');
+  if (fb) refocus(fb.dataset.id);
+});
 
 // 画布平移(拖拽空白) + 滚轮缩放
 let pan = null;

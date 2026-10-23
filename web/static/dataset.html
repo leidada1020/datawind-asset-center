@@ -44,6 +44,16 @@ pre{background:#0f172a;color:#e2e8f0;padding:14px;border-radius:8px;font-size:12
 .changes .t.upstream_changed{background:#e0f2fe;color:#0369a1;}
 .changes .t.logic_changed{background:#fff3e0;color:#e65100;}
 .changes .t.source_changed{background:#fce4ec;color:#c2185b;}
+.badge{display:inline-block;padding:2px 9px;border-radius:10px;font-size:12px;background:#e8f0f4;color:var(--main);}
+.badge.ok{background:#e6f4ea;color:#1a7f37;}
+.badge.warn{background:#fdf0e3;color:#b45309;}
+.badge.bad{background:#fde8e8;color:#c0392b;}
+.tl-date{font-size:12.5px;color:var(--sub);font-weight:600;padding:10px 0 2px;border-bottom:1px solid var(--line);margin-top:4px;}
+.timeline{list-style:none;position:relative;margin:0;padding:6px 0 0 20px;}
+.timeline:before{content:'';position:absolute;left:6px;top:6px;bottom:6px;width:2px;background:#dbe3ea;}
+.timeline li{position:relative;padding:7px 0 7px 12px;font-size:13px;}
+.timeline li:before{content:'';position:absolute;left:-20px;top:14px;width:9px;height:9px;border-radius:50%;background:var(--main);border:2px solid #fff;box-shadow:0 0 0 1px var(--main);}
+.timeline li .tm{color:var(--sub);font-size:12px;margin-left:6px;}
 a{color:var(--main);text-decoration:none;} a:hover{text-decoration:underline;}
 .loading{display:flex;align-items:center;justify-content:center;gap:10px;color:var(--sub);padding:40px;font-size:14px;}
 .spin{width:18px;height:18px;border:2px solid var(--line);border-top-color:var(--main);border-radius:50%;animation:rot .8s linear infinite;flex-shrink:0;}
@@ -56,6 +66,8 @@ a{color:var(--main);text-decoration:none;} a:hover{text-decoration:underline;}
   border:1px solid var(--line);background:#fff;border-radius:6px;padding:6px 12px;text-decoration:none;}
 .back-bar a.back:hover{border-color:var(--main);text-decoration:none;}
 .back-bar .crumb{font-size:13px;color:var(--sub);}
+.back-bar .crumb a{color:var(--main);text-decoration:none;}
+.back-bar .crumb a:hover{text-decoration:underline;}
 .back-bar .crumb b{color:var(--text);font-weight:500;}
 .layout{display:flex;gap:20px;align-items:flex-start;}
 .layout main{flex:1;min-width:0;max-width:1440px;}
@@ -391,26 +403,54 @@ async function loadDetail(dsid){
   const flds = (d.fields || []).map(f => `<tr><td>${esc(f.name)}</td><td>${esc(f.business)}</td><td>${esc(f.type)}</td></tr>`).join('') ||
     '<tr><td colspan="3" class="empty">无字段清单（直连数据集）</td></tr>';
 
-  // 变更历史
-  const ch = (d.change_history || []).map(c => {
+  // 变更时间线: 按业务日期分组, 时间轴样式(参考 DataHub version history)
+  const _ch = d.change_history || [];
+  const chGroups = {};
+  _ch.forEach(c => {
     const t = c.mtime || (c.etl_time ? String(c.etl_time).replace('T',' ') : '');
-    return `<li>
+    (chGroups[c.dt] = chGroups[c.dt] || []).push(Object.assign({t}, c));
+  });
+  const ch = Object.keys(chGroups).sort((a,b) => b.localeCompare(a)).map(dt =>
+    `<div class="tl-date">${esc(dt)} · ${chGroups[dt].length} 条变更</div><ul class="timeline">` +
+    chGroups[dt].map(c => `<li>
     <span class="t ${c.type}">${esc(c.type_name)}</span>
-    <span style="color:var(--sub)">${esc(c.dt)}${t ? ' ' + esc(String(t).slice(11,16)) : ''}</span>
-    ${c.summary ? '<span style="color:var(--main)">' + esc(c.summary) + '</span>' : (c.fields ? '字段: ' + esc(c.fields) : '')}
-    ${c.remark ? '<span style="color:var(--sub)">(' + esc(c.remark) + ')</span>' : ''}
-  </li>`;}).join('') || '<li class="empty">暂无变更历史</li>';
+    ${c.t ? '<span class="tm">' + esc(String(c.t).slice(11,16)) + '</span>' : ''}
+    <div style="margin-top:2px;">
+      ${c.summary ? '<span style="color:var(--main)">' + esc(c.summary) + '</span>' : (c.fields ? '字段: ' + esc(c.fields) : '')}
+      ${c.remark ? '<span style="color:var(--sub)">(' + esc(c.remark) + ')</span>' : ''}
+    </div>
+  </li>`).join('') + '</ul>').join('') ||
+    '<div class="empty">暂无变更历史</div>';
 
   const kv = (k, v) => `<div><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`;
 
+  // 质量状态徽标: 基于最近同步时间(不判断status数值口径)
+  const syncBadge = (() => {
+    if (!d.last_success_task_time) return '<span class="badge bad" title="该数据集尚未有成功同步记录">未同步</span>';
+    let days = NaN;
+    try { days = Math.floor((Date.now() - new Date(String(d.last_success_task_time).replace(' ','T')).getTime()) / 864e5); } catch(e) {}
+    if (isNaN(days) || days < 0) return '<span class="badge" title="' + esc(d.last_success_task_time) + '">最近同步</span>';
+    return days <= 1
+      ? '<span class="badge ok" title="' + esc(d.last_success_task_time) + '">同步正常</span>'
+      : '<span class="badge warn" title="' + esc(d.last_success_task_time) + '">停滞 ' + days + ' 天</span>';
+  })();
+  const chgCnt = (d.change_history || []).length;
+  const ownerInfo = d.owner_email ? kv('Owner', d.owner_email) : '';
+
+  // 面包屑: 资产目录 / 文件夹路径 / 数据集名 (文件夹可点击回目录定位)
+  const folderCrumb = d.folder_path
+    ? `<a href="javascript:void(0)" onclick="goFolder(${JSON.stringify(d.folder_path)}, ${JSON.stringify((d.folder_path||'').split('/').pop()||'')})">${esc(d.folder_path)}</a>`
+    : '<span>未归档/根目录</span>';
+
   $('main').innerHTML = `
     <div class="back-bar">
-      <a class="back" href="/">← 返回资产目录</a>
-      <span class="crumb">数据集详情 / <b>${esc(d.name)}</b></span>
+      <a class="back" href="/">← 资产目录</a>
+      <span class="crumb"><a href="/">资产目录</a> / ${folderCrumb} / <b>${esc(d.name)}</b></span>
     </div>
-    <div class="panel"><h2>基本信息</h2>
+    <div class="panel"><h2>基本信息 <span style="font-weight:400;font-size:12px;color:var(--sub);margin-left:8px;">${syncBadge}</span></h2>
       <div class="kv">
         ${kv('数据集ID', d.dataset_id)}${kv('名称', d.name)}${kv('文件夹', d.folder_path)}
+        ${ownerInfo}
         ${kv('类型', d.type_name)}${kv('调度频率', d.frequency)}${kv('调度时间', d.schedule_time)}
         ${kv('状态', d.status)}${kv('行数(上次成功)', d.rows_cnt)}${kv('上次同步', d.last_success_task_time)}
         ${kv('创建时间', d.ctime)}${kv('修改时间', d.mtime)}${kv('同步方式', d.sync_type)}
@@ -442,7 +482,7 @@ async function loadDetail(dsid){
       <tbody>${flds}</tbody></table></div>
     </div>
     <div class="panel"><h2>加工 SQL</h2><pre>${esc(d.sql_logic || '（无加工SQL / 直连）')}</pre></div>
-    <div class="panel"><h2>变更历史</h2><ul class="changes">${ch}</ul></div>`;
+    <div class="panel"><h2>变更时间线 <span style="font-weight:400;font-size:12px;color:var(--sub);margin-left:8px;">近 ${chgCnt} 条 · 按检测日分组</span></h2>${ch}</div>`;
 
   // 更新当前选中态 + URL(便于刷新/分享)
   curDsid = dsid;
@@ -459,6 +499,18 @@ window.addEventListener('popstate', () => {
   const id = getDsid();
   if (id && id !== curDsid) loadDetail(id);
 });
+
+// 面包屑点击文件夹 -> 回资产目录并定位到该文件夹(复用 index 的目录状态记忆)
+function goFolder(path, name){
+  try {
+    sessionStorage.setItem('assetCatalogState', JSON.stringify({
+      mode: 'folder', kw: '', layerSel: '', dbSel: '',
+      folderSel: path, folderName: name,
+      dsType: '', dsStatus: '', dsSource: '', dsFreq: '', page: 1
+    }));
+  } catch (e) { /* 忽略 */ }
+  location.href = '/';
+}
 
 loadTrees();
 loadDetail(getDsid());
