@@ -657,6 +657,33 @@ def api_changes(date: str = "", date_from: str = "", date_to: str = "",
     return {"total": cnt, "page": page, "size": size, "items": items}
 
 
+# ---------------- 变更筛选项元数据(类型枚举+字段枚举统一数据来源) ----------------
+@app.get("/api/change_meta")
+@ttl_cache(300)
+def api_change_meta():
+    d = get_doris()
+    rows = d.exec("SELECT DISTINCT change_type, change_type_name "
+                  "FROM etl.dwd_datawind_dataset_change_i_d ORDER BY change_type", fetch=True)
+    types = [{"value": r[0], "name": r[1]} for r in rows]
+    rows2 = d.exec("SELECT change_type, changed_fields "
+                   "FROM etl.dwd_datawind_dataset_change_i_d "
+                   "WHERE changed_fields IS NOT NULL AND changed_fields != ''", fetch=True)
+    fm = {}
+    NOISE = {"ALL", "DELETED", "new", "old", "raw", ""}
+    for ct, cf in rows2:
+        for x in (cf or "").split(","):
+            x = x.strip()
+            if x and x not in NOISE:
+                fm.setdefault(x, set()).add(ct)
+    pri = ["sql_logic", "data_source_id", "data_source_type", "cluster_name", "source_db",
+           "upstream", "folder_id", "folder_path", "name", "type_code", "status",
+           "sync_type", "frequency", "schedule_time", "schedule_day", "ttl",
+           "connection_mode", "partition_filter", "confidentiality"]
+    fields = [{"name": f, "types": sorted(fm[f])} for f in
+              sorted(fm, key=lambda x: (pri.index(x) if x in pri else 99, x))]
+    return {"types": types, "fields": fields}
+
+
 # ---------------- 类型分布(目录筛选用) ----------------
 @app.get("/api/types")
 @ttl_cache(120)

@@ -68,7 +68,7 @@ a{color:var(--main);text-decoration:none;} a:hover{text-decoration:underline;}
         <option value="source_changed">数据源切换</option><option value="upstream_changed">上游表变化</option>
         <option value="folder_changed">文件夹变更</option>
       </select>
-      <input id="fields" placeholder="变更字段(如 sql_logic / data_source_id)" style="width:190px">
+      <select id="fields" style="width:200px"><option value="">全部字段</option></select>
       <select id="src">
         <option value="">全部来源</option><option value="daily">每日全量</option>
         <option value="poll">5分钟轮询</option>
@@ -100,6 +100,28 @@ function errHtml(msg){ return `<div class="err-box">加载失败: ${esc(msg)} <b
   const s = d.toISOString().slice(0, 10);
   $('from').value = s; $('to').value = s;
 })();
+
+// 筛选项与类型枚举统一数据来源: /api/change_meta (数据库实际 distinct)
+let FIELD_META = [];  // [{name, types:[change_type,...]}]
+async function loadMeta(){
+  try {
+    const d = await j('/api/change_meta');
+    if (d.error || !d.types) return;
+    $('type').innerHTML = '<option value="">全部类型</option>' + d.types.map(t =>
+      `<option value="${esc(t.value)}">${esc(t.name)}</option>`).join('');
+    FIELD_META = d.fields || [];
+    renderFieldSel();
+  } catch(e){ /* 接口失败时保留硬编码类型与空字段下拉 */ }
+}
+function renderFieldSel(){
+  const t = $('type').value;
+  const cur = $('fields').value;
+  const list = FIELD_META.filter(f => !t || (f.types || []).includes(t));
+  $('fields').innerHTML = '<option value="">全部字段</option>' + list.map(f =>
+    `<option value="${esc(f.name)}" ${f.name === cur ? 'selected' : ''}>${esc(f.name)}</option>`).join('');
+}
+loadMeta();
+$('type').addEventListener('change', () => { page = 1; renderFieldSel(); });
 
 function escV(v, n){
   let s = v ?? '-';
