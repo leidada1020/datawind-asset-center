@@ -422,6 +422,21 @@ async function loadDetail(dsid){
   </li>`).join('') + '</ul>').join('') ||
     '<div class="empty">暂无变更历史</div>';
 
+  // 维度指标(dimMet): 指标(variety=2)为聚合列, 维度(variety=1)为分组列
+  const mds = d.metric_defs || [];
+  const mItems = mds.filter(m => m.variety === 2);
+  const dItems = mds.filter(m => m.variety === 1);
+  const metRow = m => `<tr><td>${esc(m.name)}</td><td>${esc(m.type)}</td>
+    <td><code style="font-size:12px;color:var(--main);word-break:break-all;">${esc(m.expr)}</code></td>
+    <td title="${esc(m.fields)}">${esc(String(m.fields||'').slice(0,40))}</td></tr>`;
+  const metHtml = (title, arr, note) => arr.length
+    ? `<div class="panel"><h2>${title} <span style="font-weight:400;font-size:12px;color:var(--sub);margin-left:8px;">${note} · ${arr.length} 个</span></h2>
+       <div style="overflow-x:auto;"><table><thead><tr><th>名称</th><th>类型</th><th>计算表达式</th><th>依赖字段</th></tr></thead>
+       <tbody>${arr.map(metRow).join('')}</tbody></table></div></div>`
+    : '';
+  const aggPanel = metHtml('聚合列（指标）', mItems, 'dimMet variety=2') +
+                   metHtml('维度列（分组）', dItems, 'dimMet variety=1');
+
   const kv = (k, v) => `<div><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`;
 
   // 质量状态徽标: 基于最近同步时间(不判断status数值口径)
@@ -482,6 +497,7 @@ async function loadDetail(dsid){
       <tbody>${flds}</tbody></table></div>
     </div>
     <div class="panel"><h2>加工 SQL</h2><pre>${esc(d.sql_logic || '（无加工SQL / 直连）')}</pre></div>
+    ${aggPanel}
     <div class="panel"><h2>变更时间线 <span style="font-weight:400;font-size:12px;color:var(--sub);margin-left:8px;">近 ${chgCnt} 条 · 按检测日分组</span></h2>${ch}</div>`;
 
   // 更新当前选中态 + URL(便于刷新/分享)
