@@ -288,8 +288,61 @@ def api_dataset_detail(dsid: int):
                             "order": r[5]} for r in md]
     # 变更历史(该数据集)
     ch = d.exec("SELECT dt, change_type, change_type_name, changed_fields, diff_json, remark FROM etl.dwd_datawind_dataset_change_i_d WHERE dataset_id=%s ORDER BY dt DESC, change_id DESC LIMIT 20", (dsid,), fetch=True)
-    info["change_history"] = [{"dt": str(r[0]), "type": r[1], "type_name": r[2], "fields": r[3], "diff": r[4], "remark": r[5]} for r in ch]
+    info["change_history"] = []
+    for r in ch:
+        dff = None
+        try:
+            dff = json.loads(r[4]) if r[4] else None
+        except Exception:
+            dff = None
+        info["change_history"].append({"dt": str(r[0]), "type": r[1], "type_name": r[2],
+                                       "fields": r[3], "diff": dff, "remark": r[5],
+                                       "summary": change_summary(r[1], dff)})
     return info
+
+
+def change_summary(ctype, diff):
+    """将变更记录渲染为人类可读摘要: 修改事件 + 变了什么(旧->新/增删明细)"""
+    if not diff or not isinstance(diff, dict):
+        return ""
+    if ctype == "added":
+        nw = diff.get("new") or {}
+        nm = nw.get("name")
+        return "新增数据集" + (("「%s」" % nm) if nm else "")
+    if ctype == "deleted":
+        old = diff.get("old") or {}
+        nm = old.get("name")
+        return "数据集已删除" + (("「%s」" % nm) if nm else "")
+    if ctype == "folder_changed":
+        f = diff.get("folder_path") or {}
+        return "文件夹变更: %s → %s" % (f.get("old") or "-", f.get("new") or "-")
+    if ctype == "logic_changed":
+        s = diff.get("sql_logic") or {}
+        o, n = (s.get("old") or ""), (s.get("new") or "")
+        return "加工SQL已变更(%d→%d字符)" % (len(o), len(n))
+    if ctype == "source_changed":
+        names = {"data_source_type": "数据源类型", "data_source_id": "数据源ID",
+                 "cluster_name": "集群", "source_db": "源库"}
+        parts = ["%s: %s → %s" % (names.get(k, k), (v.get("old") or "-"),
+                                  (v.get("new") or "-"))
+                 for k, v in diff.items() if isinstance(v, dict)]
+        return "数据源切换: " + "; ".join(parts)
+    if ctype == "upstream_changed":
+        u = diff.get("upstream") or {}
+        o = set(x.strip() for x in (u.get("old") or "").split(",") if x.strip())
+        n = set(x.strip() for x in (u.get("new") or "").split(",") if x.strip())
+        parts = []
+        if n - o:
+            parts.append("新增来源表: " + ", ".join(sorted(n - o)[:10]))
+        if o - n:
+            parts.append("移除来源表: " + ", ".join(sorted(o - n)[:10]))
+        return "上游表变化: " + (" | ".join(parts) if parts else "无增删")
+    if ctype == "config_changed":
+        parts = ["%s: %s → %s" % (k, (v.get("old") if v and v.get("old") is not None else "-"),
+                                  (v.get("new") if v and v.get("new") is not None else "-"))
+                 for k, v in diff.items() if isinstance(v, dict)]
+        return "配置修改: " + "; ".join(parts)
+    return ""
 
 
 # ---------------- 表下游影响面 ----------------
@@ -599,6 +652,7 @@ def api_changes(date: str = "", date_from: str = "", date_to: str = "",
             "type": r[4], "type_name": r[5], "fields": r[6] or "",
             "diff": diff, "folder_path": r[8] or "", "remark": r[9] or "",
             "etl_time": str(r[10]) if r[10] else "",
+            "summary": change_summary(r[4], diff),
         })
     return {"total": cnt, "page": page, "size": size, "items": items}
 

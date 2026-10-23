@@ -395,7 +395,7 @@ async function loadDetail(dsid){
   const ch = (d.change_history || []).map(c => `<li>
     <span class="t ${c.type}">${esc(c.type_name)}</span>
     <span style="color:var(--sub)">${esc(c.dt)}</span>
-    ${c.fields ? '字段: ' + esc(c.fields) : ''}
+    ${c.summary ? '<span style="color:var(--main)">' + esc(c.summary) + '</span>' : (c.fields ? '字段: ' + esc(c.fields) : '')}
     ${c.remark ? '<span style="color:var(--sub)">(' + esc(c.remark) + ')</span>' : ''}
   </li>`).join('') || '<li class="empty">暂无变更历史</li>';
 
