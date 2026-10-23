@@ -14,6 +14,7 @@ FastAPI 只读服务: 查 Doris 当日分区, 提供
   uvicorn web.app:app --host 0.0.0.0 --port 8080
 """
 import datetime
+import functools
 import json
 import os
 import sys
@@ -41,10 +42,11 @@ _lineage_cache = {"t": 0.0}
 
 
 def ttl_cache(seconds=120):
-    """参数化 TTL 缓存(进程内, LRU 上限 256)"""
+    """参数化 TTL 缓存(进程内, LRU 上限 256); wraps 保留原签名供 FastAPI Query 解析"""
     def deco(fn):
         store, order = {}, []
 
+        @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             key = repr((args, tuple(sorted(kwargs.items()))))
             now = time.time()
