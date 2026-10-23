@@ -287,7 +287,9 @@ def api_dataset_detail(dsid: int):
                             "fields": r[3] or "", "type": r[4] or "",
                             "order": r[5]} for r in md]
     # 变更历史(该数据集)
-    ch = d.exec("SELECT dt, change_type, change_type_name, changed_fields, diff_json, remark FROM etl.dwd_datawind_dataset_change_i_d WHERE dataset_id=%s ORDER BY dt DESC, change_id DESC LIMIT 20", (dsid,), fetch=True)
+    ch = d.exec("SELECT dt, change_type, change_type_name, changed_fields, diff_json, remark, etl_time "
+                "FROM etl.dwd_datawind_dataset_change_i_d WHERE dataset_id=%s "
+                "ORDER BY dt DESC, change_id DESC LIMIT 20", (dsid,), fetch=True)
     info["change_history"] = []
     for r in ch:
         dff = None
@@ -297,6 +299,7 @@ def api_dataset_detail(dsid: int):
             dff = None
         info["change_history"].append({"dt": str(r[0]), "type": r[1], "type_name": r[2],
                                        "fields": r[3], "diff": dff, "remark": r[5],
+                                       "etl_time": str(r[6]) if r[6] else "",
                                        "summary": change_summary(r[1], dff)})
     return info
 

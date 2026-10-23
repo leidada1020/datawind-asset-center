@@ -354,6 +354,7 @@ async function loadChanges(){
       <a class="ds" href="/dataset/${i.dataset_id}">${esc(i.name)}</a>
       <span style="color:var(--sub)">[${i.dataset_id}]</span>
       ${i.summary ? '<span style="color:var(--main)">' + esc(i.summary) + '</span>' : ''}
+      ${i.etl_time ? '<span style="color:var(--sub);font-size:12px;">' + esc(String(i.etl_time).slice(0,16).replace('T',' ')) + '</span>' : ''}
     </li>`).join('');
   } catch (e) { $('changesList').innerHTML = `<li>${errHtml(e.message)}</li>`; }
 }

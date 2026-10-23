@@ -78,8 +78,7 @@ a{color:var(--main);text-decoration:none;} a:hover{text-decoration:underline;}
     </div>
     <div style="overflow-x:auto;"><table>
       <thead><tr><th>日期</th><th>类型</th><th>数据集</th><th>变更摘要</th><th>明细</th><th>来源</th></tr></thead>
-      <tbody id="tb"><tr><td colspan="6" class="loading" style="padding:24px"><span class="spin"></span>正在加载变更明细...</td></tr></tbody>
-    </table></div>
+      <tbody id="tb"><tr><td colspan="6" class="loading" style="padding:24px"><span class="spin"></span>正在加载变更明细...</td></tr></tbody>    </table></div>
     <div class="pager"><button id="prevBtn">上一页</button><span id="pageLabel"></span><button id="nextBtn">下一页</button></div>
   </div>
 </main>
@@ -185,7 +184,7 @@ async function loadList(){
   $('prevBtn').disabled = page <= 1;
   $('nextBtn').disabled = page * d.size >= total;
   $('tb').innerHTML = d.items.map(i => `<tr>
-    <td>${esc(i.dt)}</td>
+    <td>${esc(i.dt)}${i.etl_time ? '<div style="color:var(--sub);font-size:12px;">' + esc(String(i.etl_time).slice(11,16)) + '</div>' : ''}</td>
     <td><span class="t ${i.type}">${esc(i.type_name)}</span></td>
     <td><a href="/dataset/${i.dataset_id}">${esc(i.name)}</a> [${i.dataset_id}]</td>
     <td>${i.summary ? esc(i.summary) : esc(i.fields)}</td>
