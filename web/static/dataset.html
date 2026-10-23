@@ -392,12 +392,14 @@ async function loadDetail(dsid){
     '<tr><td colspan="3" class="empty">无字段清单（直连数据集）</td></tr>';
 
   // 变更历史
-  const ch = (d.change_history || []).map(c => `<li>
+  const ch = (d.change_history || []).map(c => {
+    const t = c.mtime || (c.etl_time ? String(c.etl_time).replace('T',' ') : '');
+    return `<li>
     <span class="t ${c.type}">${esc(c.type_name)}</span>
-    <span style="color:var(--sub)">${esc(c.dt)}${c.etl_time ? ' ' + esc(String(c.etl_time).slice(11,16)) : ''}</span>
+    <span style="color:var(--sub)">${esc(c.dt)}${t ? ' ' + esc(String(t).slice(11,16)) : ''}</span>
     ${c.summary ? '<span style="color:var(--main)">' + esc(c.summary) + '</span>' : (c.fields ? '字段: ' + esc(c.fields) : '')}
     ${c.remark ? '<span style="color:var(--sub)">(' + esc(c.remark) + ')</span>' : ''}
-  </li>`).join('') || '<li class="empty">暂无变更历史</li>';
+  </li>`;}).join('') || '<li class="empty">暂无变更历史</li>';
 
   const kv = (k, v) => `<div><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`;
 

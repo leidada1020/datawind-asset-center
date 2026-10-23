@@ -287,7 +287,7 @@ def api_dataset_detail(dsid: int):
                             "fields": r[3] or "", "type": r[4] or "",
                             "order": r[5]} for r in md]
     # 变更历史(该数据集)
-    ch = d.exec("SELECT dt, change_type, change_type_name, changed_fields, diff_json, remark, etl_time "
+    ch = d.exec("SELECT dt, change_type, change_type_name, changed_fields, diff_json, remark, etl_time, mtime "
                 "FROM etl.dwd_datawind_dataset_change_i_d WHERE dataset_id=%s "
                 "ORDER BY dt DESC, change_id DESC LIMIT 20", (dsid,), fetch=True)
     info["change_history"] = []
@@ -300,6 +300,7 @@ def api_dataset_detail(dsid: int):
         info["change_history"].append({"dt": str(r[0]), "type": r[1], "type_name": r[2],
                                        "fields": r[3], "diff": dff, "remark": r[5],
                                        "etl_time": str(r[6]) if r[6] else "",
+                                       "mtime": str(r[7]) if r[7] else "",
                                        "summary": change_summary(r[1], dff)})
     return info
 
@@ -640,7 +641,7 @@ def api_changes(date: str = "", date_from: str = "", date_to: str = "",
     off = (page - 1) * size
     rows = d.exec(
         "SELECT dt, change_id, dataset_id, dataset_name, change_type, change_type_name, "
-        "changed_fields, diff_json, folder_path, remark, etl_time "
+        "changed_fields, diff_json, folder_path, remark, etl_time, mtime "
         "FROM etl.dwd_datawind_dataset_change_i_d WHERE %s ORDER BY dt DESC, change_id DESC LIMIT %s OFFSET %s"
         % (w, size, off), args, fetch=True)
     items = []
@@ -655,6 +656,7 @@ def api_changes(date: str = "", date_from: str = "", date_to: str = "",
             "type": r[4], "type_name": r[5], "fields": r[6] or "",
             "diff": diff, "folder_path": r[8] or "", "remark": r[9] or "",
             "etl_time": str(r[10]) if r[10] else "",
+            "mtime": str(r[11]) if r[11] else "",
             "summary": change_summary(r[4], diff),
         })
     return {"total": cnt, "page": page, "size": size, "items": items}

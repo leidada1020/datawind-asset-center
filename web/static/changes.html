@@ -183,14 +183,16 @@ async function loadList(){
   $('pageLabel').textContent = `第 ${d.page} / ${Math.max(1, Math.ceil(total/d.size))} 页`;
   $('prevBtn').disabled = page <= 1;
   $('nextBtn').disabled = page * d.size >= total;
-  $('tb').innerHTML = d.items.map(i => `<tr>
-    <td>${esc(i.dt)}${i.etl_time ? '<div style="color:var(--sub);font-size:12px;">' + esc(String(i.etl_time).slice(11,16)) + '</div>' : ''}</td>
+  $('tb').innerHTML = d.items.map(i => {
+    const t = i.mtime || (i.etl_time ? String(i.etl_time).replace('T',' ') : '');
+    return `<tr>
+    <td>${esc(i.dt)}${t ? '<div style="color:var(--sub);font-size:12px;">' + esc(String(t).slice(11,16)) + '</div>' : ''}</td>
     <td><span class="t ${i.type}">${esc(i.type_name)}</span></td>
     <td><a href="/dataset/${i.dataset_id}">${esc(i.name)}</a> [${i.dataset_id}]</td>
     <td>${i.summary ? esc(i.summary) : esc(i.fields)}</td>
     <td>${diffText(i.diff)}</td>
     <td>${esc(i.remark)}</td>
-  </tr>`).join('') || '<tr><td colspan="6" class="empty">无变更记录</td></tr>';
+  </tr>`;}).join('') || '<tr><td colspan="6" class="empty">无变更记录</td></tr>';
   } catch(e){
     $('tb').innerHTML = `<tr><td colspan="6">${errHtml(e.message)}</td></tr>`;
   } finally { btn.disabled = false; }

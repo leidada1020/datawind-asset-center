@@ -191,19 +191,19 @@ def write_changes(doris, changes, logger):
     cid = next_change_id(doris)
     names = {"added": "新增", "deleted": "删除",
              "logic_changed": "加工逻辑变化", "source_changed": "数据源切换"}
-    ins = ("INSERT INTO %s (dt, etl_time, change_id, dataset_id, dataset_name, change_type, "
+    ins = ("INSERT INTO %s (dt, etl_time, mtime, change_id, dataset_id, dataset_name, change_type, "
            "change_type_name, changed_fields, diff_json, folder_path, remark) "
-           "VALUES (%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s)"
+           "VALUES (%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s)"
            % TBL_CHANGE.format(db=doris.db))
     rows = []
-    for ct, rid, rname, diff in changes:
-        rows.append((dt, etl_time, cid, rid, rname, ct, names.get(ct, ct),
+    for ct, rid, rname, diff, mt in changes:
+        rows.append((dt, etl_time, mt or None, cid, rid, rname, ct, names.get(ct, ct),
                      ",".join(sorted(diff.keys())), json.dumps(diff, ensure_ascii=False),
                      None, "5分钟轮询检测"))
         cid += 1
     doris.execmany(ins, rows)
     logger.info("变更落库 %d 条: %s", len(rows), ", ".join(
-        "[%s]%s" % (names.get(c, c), r) for c, _, r, _ in changes))
+        "[%s]%s" % (names.get(c, c), r) for c, _, r, _, _ in changes))
 
 
 def sync_lineage_incremental(client, doris, sync_map, logger):
@@ -244,18 +244,21 @@ def sync_lineage_incremental(client, doris, sync_map, logger):
                     % TBL_SNAPSHOT.format(db=doris.db), (dt, dsid_int), fetch=True)
                 old_row = old[0] if old else None
                 extra_changes = []
+                meta_mtime = (meta or {}).get("mtime") or ""
                 if old_row is not None:
                     old_sql = (old_row[0] or "").strip()
                     new_sql = (sql or "").strip()
                     if old_sql and new_sql and old_sql != new_sql:
                         extra_changes.append(("logic_changed", dsid_int, (meta or {}).get("name") or "",
-                                              {"sql_logic": {"old": old_sql[:2000], "new": new_sql[:2000]}}))
+                                              {"sql_logic": {"old": old_sql[:2000], "new": new_sql[:2000]}},
+                                              meta_mtime))
                     src_old = [old_row[1] or "", old_row[2] or "", old_row[3] or "", old_row[4] or ""]
                     src_new = [(ds_src or {}).get("type") or "", (ds_src or {}).get("id") or "",
                                (ds_src or {}).get("cluster") or "", (ds_src or {}).get("db") or ""]
                     if src_old != src_new:
                         extra_changes.append(("source_changed", dsid_int, (meta or {}).get("name") or "",
-                                              {"data_source": {"old": src_old, "new": src_new}}))
+                                              {"data_source": {"old": src_old, "new": src_new}},
+                                              meta_mtime))
                 if extra_changes:
                     write_changes(doris, extra_changes, logger)
                     logger.info("实质变更[%s]: %s", dsid,
@@ -385,11 +388,13 @@ def poll_once(client, doris, baseline, logger):
     # 新增
     for i, d in current.items():
         if i not in baseline:
-            changes.append(("added", i, d["name"], {"new": {"name": d["name"], "mtime": d["mtime"]}}))
+            changes.append(("added", i, d["name"], {"new": {"name": d["name"], "mtime": d["mtime"]}},
+                            d.get("mtime") or ""))
     # 删除
     for i, old in baseline.items():
         if i not in current:
-            changes.append(("deleted", i, old.get("name") or "", {"old": {"name": old.get("name")}}))
+            changes.append(("deleted", i, old.get("name") or "", {"old": {"name": old.get("name")}},
+                            old.get("mtime") or ""))
     # 元数据修改(mtime 变化): 不直接记变更, 仅作为"可能逻辑/数据源变化"的信号
     #   由 sync_lineage_incremental 拉取加工逻辑后对比当日快照, 只记实质变化
     changed_meta = []
@@ -404,7 +409,7 @@ def poll_once(client, doris, baseline, logger):
     #   并顺手将最新加工SQL/来源表/字段清单更新进当日快照(详情页准实时);
     #   同时对比当日快照检测 加工逻辑变化(logic_changed)/数据源切换(source_changed) 写入变更
     sync_map = {}
-    for ct, rid, rname, diff in changes:
+    for ct, rid, rname, diff, _mt in changes:
         if ct == "added":
             sync_map[rid] = {"mtime": (diff.get("new") or {}).get("mtime", ""), "name": rname}
     for rid, rname, mt in changed_meta:

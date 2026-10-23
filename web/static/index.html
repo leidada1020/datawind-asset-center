@@ -349,13 +349,15 @@ async function loadChanges(){
     if (d.error) throw new Error(d.error);
     const list = $('changesList');
     if (!d.items || !d.items.length){ list.innerHTML = '<li class="empty">今日暂无变更</li>'; return; }
-    list.innerHTML = d.items.map(i => `<li>
+    list.innerHTML = d.items.map(i => {
+      const t = i.mtime || (i.etl_time ? String(i.etl_time).replace('T',' ') : '');
+      return `<li>
       <span class="t ${i.type}">${esc(i.type_name)}</span>
       <a class="ds" href="/dataset/${i.dataset_id}">${esc(i.name)}</a>
       <span style="color:var(--sub)">[${i.dataset_id}]</span>
       ${i.summary ? '<span style="color:var(--main)">' + esc(i.summary) + '</span>' : ''}
-      ${i.etl_time ? '<span style="color:var(--sub);font-size:12px;">' + esc(String(i.etl_time).slice(0,16).replace('T',' ')) + '</span>' : ''}
-    </li>`).join('');
+      ${t ? '<span style="color:var(--sub);font-size:12px;">' + esc(String(t).slice(0,16).replace('T',' ')) + '</span>' : ''}
+    </li>`;}).join('');
   } catch (e) { $('changesList').innerHTML = `<li>${errHtml(e.message)}</li>`; }
 }
 

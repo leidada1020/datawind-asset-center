@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS {db}.dwd_datawind_dataset_change_i_d (
     dt                  DATE         NOT NULL COMMENT '变更发生日(分区键)=快照日',
     change_id           BIGINT       NOT NULL COMMENT '变化序号(当日自增, 与dt构成唯一键, 重跑幂等)',
     etl_time            DATETIME     NOT NULL COMMENT '数据处理时间',
+    mtime               DATETIME     COMMENT '数据集更新时间(变更发生时DataWind元数据mtime)',
     dataset_id          BIGINT       NOT NULL COMMENT '数据集ID',
     dataset_name        VARCHAR(512) COMMENT '数据集名称(变更后)',
     change_type         VARCHAR(32)  COMMENT '变更类别编码: added=新增 deleted=删除 config_changed=配置修改 logic_changed=加工逻辑变化 source_changed=数据源切换 upstream_changed=上游表变化 folder_changed=文件夹变更(行数/同步时间变化不计变更)',

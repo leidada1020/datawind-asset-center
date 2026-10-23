@@ -102,7 +102,8 @@ def diff_changes(current, prev):
     """对比当前 vs 上一个快照，生成变更列表。
 
     current/prev: {dataset_id: 归一化字典}
-    返回: [(change_type, dataset_id, dataset_name, changed_fields, diff_json, folder_path), ...]
+    返回: [(change_type, dataset_id, dataset_name, changed_fields, diff_json, folder_path, mtime), ...]
+    末位 mtime=数据集更新时间(变更发生时 DataWind 元数据值)
     """
     changes = []
     # 新增
@@ -111,14 +112,14 @@ def diff_changes(current, prev):
             changes.append(("added", i, d["name"], "ALL",
                             json.dumps({"new": {"name": d["name"], "folder_path": d["folder_path"]}},
                                        ensure_ascii=False),
-                            d["folder_path"]))
+                            d["folder_path"], d.get("mtime") or ""))
     # 删除
     for i, old in prev.items():
         if i not in current:
             changes.append(("deleted", i, old.get("name") or "", "DELETED",
                             json.dumps({"old": {"name": old.get("name"), "folder_path": old.get("folder_path")}},
                                        ensure_ascii=False),
-                            old.get("folder_path")))
+                            old.get("folder_path"), old.get("mtime") or ""))
     # 修改
     for i, d in current.items():
         old = prev.get(i)
@@ -132,13 +133,14 @@ def diff_changes(current, prev):
                 diff[f] = {"old": old.get(f), "new": d.get(f)}
         if cfg_changed:
             changes.append(("config_changed", i, d["name"], ",".join(cfg_changed),
-                            json.dumps(diff, ensure_ascii=False), d["folder_path"]))
+                            json.dumps(diff, ensure_ascii=False), d["folder_path"],
+                            d.get("mtime") or ""))
         if old.get("folder_id") != d.get("folder_id"):
             changes.append(("folder_changed", i, d["name"], "folder_id,folder_path",
                             json.dumps({"folder_id": {"old": old.get("folder_id"), "new": d.get("folder_id")},
                                         "folder_path": {"old": old.get("folder_path"), "new": d.get("folder_path")}},
                                        ensure_ascii=False),
-                            d["folder_path"]))
+                            d["folder_path"], d.get("mtime") or ""))
         # 加工逻辑变化: 加工SQL全文对比(直连/无SQL数据集不产生该类型)
         old_sql = (old.get("sql_logic") or "").strip()
         new_sql = (d.get("sql_logic") or "").strip()
@@ -146,7 +148,7 @@ def diff_changes(current, prev):
             changes.append(("logic_changed", i, d["name"], "sql_logic",
                             json.dumps({"sql_logic": {"old": old_sql[:2000], "new": new_sql[:2000]}},
                                        ensure_ascii=False),
-                            d["folder_path"]))
+                            d["folder_path"], d.get("mtime") or ""))
         # 数据源切换: type/id/cluster/db 任一变化
         src_fields = ["data_source_type", "data_source_id", "cluster_name", "source_db"]
         src_diff = {}
@@ -156,10 +158,10 @@ def diff_changes(current, prev):
         if src_diff:
             changes.append(("source_changed", i, d["name"], ",".join(src_diff.keys()),
                             json.dumps(src_diff, ensure_ascii=False),
-                            d["folder_path"]))
+                            d["folder_path"], d.get("mtime") or ""))
         if (old.get("upstream") or "") != (d.get("upstream") or ""):
             changes.append(("upstream_changed", i, d["name"], "upstream",
                             json.dumps({"upstream": {"old": old.get("upstream"), "new": d.get("upstream")}},
                                        ensure_ascii=False),
-                            d["folder_path"]))
+                            d["folder_path"], d.get("mtime") or ""))
     return changes

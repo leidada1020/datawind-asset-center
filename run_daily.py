@@ -152,11 +152,12 @@ def build_closure(doris, stat_date, etl_time):
     return len(c_rows)
 
 
-def lineage_diff(prev_dt, cur_dt, doris, dataset_names):
+def lineage_diff(prev_dt, cur_dt, doris, dataset_names, dataset_mtimes):
     """血缘 diff: 上游表变化 -> 变更列表
 
     对比上一 dt 与当日 dt 的表级血缘边(数据集维度, 两独立查询):
       upstream_changed = 上游表集合变化(新增/删除来源表), diff_json 记增减明细
+    dataset_mtimes: {dataset_id: mtime} 变更发生时数据集更新时间
     """
     def table_set(dt):
         rows = doris.exec(
@@ -180,7 +181,7 @@ def lineage_diff(prev_dt, cur_dt, doris, dataset_names):
                 "upstream_changed", dsid, dataset_names.get(dsid, ""),
                 "upstream", json.dumps({"added": added, "removed": removed},
                                        ensure_ascii=False),
-                ""))
+                "", dataset_mtimes.get(dsid) or ""))
     return changes
 
 
@@ -326,7 +327,8 @@ def main():
             # 血缘 diff: 上游表变化并入变更
             if prev_date:
                 names = {i: d.get("name", "") for i, d in current.items()}
-                lc = lineage_diff(str(prev_date), stat_date, doris, names)
+                mtimes = {i: (d.get("mtime") or "") for i, d in current.items()}
+                lc = lineage_diff(str(prev_date), stat_date, doris, names, mtimes)
                 if lc:
                     changes.extend(lc)
                     print("    血缘 diff: 上游表变化 %d 条" % len(lc))
@@ -345,10 +347,10 @@ def main():
         # 只清删本脚本当日写入(remark='每日全量')的记录, 保留 5 分钟轮询写入的变更
         doris.exec("DELETE FROM %s WHERE dt = %%s AND remark = '每日全量'"
                    % TBL_CHANGE.format(db=doris.db), (stat_date,))
-        ins = "INSERT INTO %s (dt, etl_time, change_id, dataset_id, dataset_name, change_type, change_type_name, changed_fields, diff_json, folder_path, remark) VALUES (%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s)" % TBL_CHANGE.format(db=doris.db)
+        ins = "INSERT INTO %s (dt, etl_time, mtime, change_id, dataset_id, dataset_name, change_type, change_type_name, changed_fields, diff_json, folder_path, remark) VALUES (%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s)" % TBL_CHANGE.format(db=doris.db)
         ins_rows = []
-        for cid, (ct, rid, rname, cfields, diff, fpath) in enumerate(changes, start=max_id + 1):
-            ins_rows.append((stat_date, etl_time, cid, rid, rname, ct,
+        for cid, (ct, rid, rname, cfields, diff, fpath, mt) in enumerate(changes, start=max_id + 1):
+            ins_rows.append((stat_date, etl_time, mt or None, cid, rid, rname, ct,
                              models.CHANGE_NAMES.get(ct, ct), cfields, diff, fpath, "每日全量"))
         doris.execmany(ins, ins_rows)
         print("==> 变更日志写入 %d 条 (remark=每日全量, change_id从%d起)"
