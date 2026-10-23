@@ -8,6 +8,7 @@
   - 字段 COMMENT 不含引号
 """
 import sys
+import threading
 import time
 
 import pymysql
@@ -24,6 +25,8 @@ class Doris:
         self.db = db or cfg.get("doris_db", "etl")
         self.conn = None
         self.cur = None
+        # 连接非线程安全: FastAPI 多线程并发复用同一连接时必须串行化
+        self._lock = threading.RLock()
 
     # ---------- 连接 ----------
     def connect(self, retries=5, gap=20):
@@ -53,45 +56,48 @@ class Doris:
             pass
 
     def _reconnect(self):
-        try:
-            self.conn.close()
-        except Exception:
-            pass
-        self.conn = pymysql.connect(
-            host=self.host, port=self.port, user=self.user,
-            password=self.password, charset="utf8mb4",
-            connect_timeout=20, read_timeout=180, write_timeout=180,
-            autocommit=True)
-        self.cur = self.conn.cursor()
+        with self._lock:
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+            self.conn = pymysql.connect(
+                host=self.host, port=self.port, user=self.user,
+                password=self.password, charset="utf8mb4",
+                connect_timeout=20, read_timeout=180, write_timeout=180,
+                autocommit=True)
+            self.cur = self.conn.cursor()
 
     # ---------- 执行 ----------
     def exec(self, sql, args=None, fetch=False):
-        """执行单条 SQL；连接抖动自动重连（最多 4 次尝试）"""
-        for attempt in range(4):
-            try:
-                self.cur.execute(sql, args)
-                rows = self.cur.fetchall() if fetch else None
-                return rows
-            except pymysql.err.OperationalError as e:
-                code = e.args[0] if e.args else 0
-                if code in RETRY_CODES and attempt < 3:
-                    print("    DB连接异常(%s), 重连重试(%d/4)..." % (e, attempt + 1), file=sys.stderr)
-                    self._reconnect()
-                    continue
-                raise
+        """执行单条 SQL；连接抖动自动重连（最多 4 次尝试）; 线程安全(RLock)"""
+        with self._lock:
+            for attempt in range(4):
+                try:
+                    self.cur.execute(sql, args)
+                    rows = self.cur.fetchall() if fetch else None
+                    return rows
+                except pymysql.err.OperationalError as e:
+                    code = e.args[0] if e.args else 0
+                    if code in RETRY_CODES and attempt < 3:
+                        print("    DB连接异常(%s), 重连重试(%d/4)..." % (e, attempt + 1), file=sys.stderr)
+                        self._reconnect()
+                        continue
+                    raise
 
     def execmany(self, sql, args_list):
-        for attempt in range(4):
-            try:
-                self.cur.executemany(sql, args_list)
-                return
-            except pymysql.err.OperationalError as e:
-                code = e.args[0] if e.args else 0
-                if code in RETRY_CODES and attempt < 3:
-                    print("    DB连接异常(%s), 重连重试(%d/4)..." % (e, attempt + 1), file=sys.stderr)
-                    self._reconnect()
-                    continue
-                raise
+        with self._lock:
+            for attempt in range(4):
+                try:
+                    self.cur.executemany(sql, args_list)
+                    return
+                except pymysql.err.OperationalError as e:
+                    code = e.args[0] if e.args else 0
+                    if code in RETRY_CODES and attempt < 3:
+                        print("    DB连接异常(%s), 重连重试(%d/4)..." % (e, attempt + 1), file=sys.stderr)
+                        self._reconnect()
+                        continue
+                    raise
 
     def count(self, table, where=None, args=None):
         sql = "SELECT COUNT(*) FROM %s" % table

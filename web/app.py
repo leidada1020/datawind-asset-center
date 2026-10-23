@@ -18,6 +18,7 @@ import functools
 import json
 import os
 import sys
+import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -45,21 +46,23 @@ def ttl_cache(seconds=120):
     """参数化 TTL 缓存(进程内, LRU 上限 256); wraps 保留原签名供 FastAPI Query 解析"""
     def deco(fn):
         store, order = {}, []
+        lock = threading.Lock()
 
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             key = repr((args, tuple(sorted(kwargs.items()))))
             now = time.time()
-            ent = store.get(key)
-            if ent is not None and now - ent[0] < seconds:
-                return ent[1]
-            data = fn(*args, **kwargs)
-            store[key] = (now, data)
-            order.append(key)
-            if len(order) > 256:
-                old = order.pop(0)
-                store.pop(old, None)
-            return data
+            with lock:
+                ent = store.get(key)
+                if ent is not None and now - ent[0] < seconds:
+                    return ent[1]
+                data = fn(*args, **kwargs)
+                store[key] = (now, data)
+                order.append(key)
+                if len(order) > 256:
+                    old = order.pop(0)
+                    store.pop(old, None)
+                return data
         return wrapper
     return deco
 
