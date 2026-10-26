@@ -1,0 +1,33 @@
+# datawind-asset-center 本地 Docker Compose（开发/验证用）
+# 默认只起 web(18081); 需要轮询采集时: docker compose --profile poll up -d
+services:
+  asset-center:
+    build: .
+    image: datawind-asset-center:local
+    container_name: asset-center
+    ports:
+      - "18081:18081"
+    environment:
+      - TZ=Asia/Shanghai
+    restart: unless-stopped
+    profiles: ["web", "poll"]
+
+  poll-5min:
+    build: .
+    image: datawind-asset-center:local
+    container_name: asset-center-poll
+    command: ["python", "-u", "/app/poll_5min.py"]
+    environment:
+      - TZ=Africa/Lusaka
+    restart: unless-stopped
+    profiles: ["poll"]
+
+  ds-poll:
+    build: .
+    image: datawind-asset-center:local
+    container_name: asset-center-dspoll
+    command: ["python", "-u", "/app/ds_poll.py", "--interval", "300"]
+    environment:
+      - TZ=Africa/Lusaka
+    restart: unless-stopped
+    profiles: ["poll"]

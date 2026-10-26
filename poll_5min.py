@@ -218,9 +218,10 @@ def sync_lineage_incremental(client, doris, sync_map, logger):
     返回成功同步的数据集数
     """
     from datawind.lineage import LineageParser, normalize_column_edge
+    from datawind.schema_provider import DorisSchemaProvider
     if not sync_map:
         return 0
-    parser = LineageParser()
+    parser = LineageParser(schema_provider=DorisSchemaProvider(doris, ttl=300))
     dt = _today_local()
     etl_time = time.strftime("%Y-%m-%d %H:%M:%S", _local_now())
     synced = 0

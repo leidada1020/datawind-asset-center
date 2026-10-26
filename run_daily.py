@@ -312,8 +312,9 @@ def main():
     if not args.no_lineage:
         try:
             from datawind.lineage import LineageParser
-            parser = LineageParser()
-            print("==> SQLGlot 血缘解析落库 ...")
+            from datawind.schema_provider import DorisSchemaProvider
+            parser = LineageParser(schema_provider=DorisSchemaProvider(doris, ttl=300))
+            print("==> SQLGlot 血缘解析落库 (schema-aware) ...")
             ds_sql_map = {i: (d.get("sql_logic"), d.get("source_tables"))
                           for i, d in current.items()}
             lineage_stat = write_lineage(doris, stat_date, etl_time, ds_sql_map, parser)

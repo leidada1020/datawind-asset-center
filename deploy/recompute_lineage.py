@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from datawind.config import load_config
 from datawind.doris import Doris
 from datawind.lineage import LineageParser
+from datawind.schema_provider import DorisSchemaProvider
 from run_daily import write_lineage
 
 cfg = load_config()
@@ -30,7 +31,7 @@ ds_map = {r[0]: (r[1], r[2]) for r in rows}
 print("[info] datasets with sql =", len(ds_map))
 
 etl_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-parser = LineageParser()
+parser = LineageParser(schema_provider=DorisSchemaProvider(doris, ttl=300))
 stat = write_lineage(doris, str(max_dt), etl_time, ds_map, parser)
 print("[result]", json.dumps(stat, ensure_ascii=False))
 doris.close()

@@ -30,7 +30,11 @@ DIALECTS = [None, "doris", "mysql"]  # 依次兜底尝试
 
 
 class LineageParser:
-    def __init__(self):
+    def __init__(self, schema_provider=None):
+        """schema_provider: 可选, 提供"表 -> 列集合"用于无前缀列消歧与 SELECT * 展开
+        (如 datawind.schema_provider.DorisSchemaProvider); 为 None 时保持纯语法解析(schema-naive)
+        """
+        self.schema = schema_provider
         if not SQLGLOT_AVAILABLE:
             logger.warning("sqlglot 未安装, 血缘解析不可用(需 pip install sqlglot)")
 
@@ -39,8 +43,11 @@ class LineageParser:
         """AST -> 上游表集合 {db.table | table}
 
         过滤 CTE 名引用(如 FROM cte_name, 非真实上游表);
-        子查询内真实表(如 FROM (SELECT ... FROM ods.t) x 中的 ods.t)正常保留
+        子查询内真实表(如 FROM (SELECT ... FROM ods.t) x 中的 ods.t)正常保留;
+        INSERT/CTAS: 排除目标表(下游), 只取 SELECT 来源
         """
+        if isinstance(ast, exp.Insert):
+            ast = ast.expression or ast  # 只解析 SELECT 部分
         tables = set()
         cte_names = {c.alias for c in ast.find_all(exp.CTE)}
         for t in ast.find_all(exp.Table):
@@ -245,6 +252,14 @@ class LineageParser:
                                 ref = (star2, name)
                                 found = True
                                 break
+                    if not found and self.schema is not None:
+                        # schema 消歧: 候选真实表(别名映射+裸表)中唯一包含该列 -> 确定归属
+                        cands = list(alias_map.values()) + bare_tables
+                        if cands:
+                            hits = self.schema.tables_with_column(name, cands)
+                            if len(hits) == 1:
+                                ref = (hits[0], name)
+                                found = True
                     if not found:
                         continue
             key = (ref[0], ref[1])
@@ -266,6 +281,49 @@ class LineageParser:
             out.append((t, f, conf))
         return out
 
+    def _star_edges(self, sel, cte_names):
+        """顶层 SELECT * 展开: 用 schema 将 * 展开为 FROM 各真实表的列
+
+        -> [(target_col, "db.table.col", conf)]
+        单表: 全部列直接归属(high);
+        多表: 列名在所有来源表中唯一归属某表则归属(high), 同名列跳过(避免假阳性);
+        含子查询/CTE 的 FROM 不展开(保持原跳过行为)
+        """
+        alias_map, bare_tables, subq_map, cte_table, cte_alias, _ = self._from_ctx(sel, cte_names)
+        if subq_map or cte_table:
+            return []
+        tables = list(alias_map.values()) + bare_tables
+        if not tables:
+            return []
+        cols_map = {}
+        for t in tables:
+            cset = self.schema.columns_of(t) if self.schema else None
+            if cset:
+                cols_map[t] = cset
+        if not cols_map:
+            return []
+        edges, seen_col = [], set()
+        if len(tables) == 1:
+            t = tables[0]
+            for col in sorted(cols_map[t]):
+                key = col.lower()
+                if key in seen_col:
+                    continue
+                seen_col.add(key)
+                edges.append((col, "%s.%s" % (t, col), "high"))
+        else:
+            for t, cset in cols_map.items():
+                for col in sorted(cset):
+                    key = col.lower()
+                    if key in seen_col:
+                        continue
+                    owners = [tt for tt in cols_map
+                              if any((c or "").lower() == key for c in cols_map[tt])]
+                    if len(owners) == 1:
+                        seen_col.add(key)
+                        edges.append((col, "%s.%s" % (owners[0], col), "high"))
+        return edges
+
     def _col_edges(self, ast, cte_names):
         """AST -> [(target, src, confidence)] 字段血缘边(仅最终查询结果字段)
 
@@ -285,6 +343,9 @@ class LineageParser:
                 cte_defs[c.alias] = c.this
         memo = {}
         for sel in top_selects:
+            # 顶层 SELECT *: schema 可用时按 FROM 真实表展开(单表全列/多表列名唯一消歧)
+            if self.schema is not None and any(isinstance(p, exp.Star) for p in sel.expressions):
+                edges.extend(self._star_edges(sel, cte_names))
             for proj in sel.expressions:
                 if isinstance(proj, exp.Star):
                     continue
@@ -324,18 +385,32 @@ class LineageParser:
 
         table_edges: [{"db_table": str, "lineage_type": "direct"}]
         column_edges: [{"target_field", "src_table", "src_field", "confidence"}]
-        stat: {"parse_status": ok/pending/fail, "dialect", "table_cnt", "col_cnt",
-               "conf_dist", "err"}
+        stat: {"parse_status": ok/pending/fail, "error_type": no-sql/no-sqlglot/parse-fail/None,
+               "dialect", "table_cnt", "col_cnt", "conf_dist", "target_table", "err"}
+        target_table: INSERT/CTAS 的目标表(下游), 供 DS 任务血缘等场景使用; SELECT 场景为空
         """
         if not sql or not SQLGLOT_AVAILABLE:
-            return [], [], {"parse_status": "pending" if not sql else "fail",
+            if not sql:
+                return [], [], {"parse_status": "pending", "error_type": "no-sql",
+                                "dialect": None, "table_cnt": 0, "col_cnt": 0,
+                                "conf_dist": {}, "target_table": "", "err": "empty-sql"}
+            return [], [], {"parse_status": "fail", "error_type": "no-sqlglot",
                             "dialect": None, "table_cnt": 0, "col_cnt": 0,
-                            "conf_dist": {}, "err": "no-sql-or-no-sqlglot"}
+                            "conf_dist": {}, "target_table": "", "err": "no-sqlglot"}
         last_err = None
         for dia in DIALECTS:
             try:
                 kw = {"read": dia} if dia else {}
                 ast = sqlglot.parse_one(sql, **kw)
+                # INSERT/CTAS 目标表(下游): 不并入上游 tables, 单独记录
+                target_table = ""
+                if isinstance(ast, exp.Insert):
+                    try:
+                        tgt = ast.this
+                        if isinstance(tgt, exp.Table) and (tgt.name or ""):
+                            target_table = ("%s.%s" % (tgt.db, tgt.name)) if tgt.db else tgt.name
+                    except Exception:
+                        target_table = ""
                 tables = sorted(self._tables(ast))
                 # CTE 名从整棵 AST 根收集(嵌套 WITH 也能覆盖), 供各层 Select 过滤
                 cte_names = {c.alias for c in ast.find_all(exp.CTE)}
@@ -351,16 +426,18 @@ class LineageParser:
                 conf_dist = {}
                 for _, _, c in cols:
                     conf_dist[c] = conf_dist.get(c, 0) + 1
-                stat = {"parse_status": "ok", "dialect": dia or "default",
+                stat = {"parse_status": "ok", "error_type": None,
+                        "dialect": dia or "default",
                         "table_cnt": len(tables), "col_cnt": len(cols),
-                        "conf_dist": conf_dist, "err": None}
+                        "conf_dist": conf_dist, "target_table": target_table,
+                        "err": None}
                 return tables, cols, stat
             except Exception as e:
                 last_err = e
                 continue
-        return [], [], {"parse_status": "fail", "dialect": None,
-                        "table_cnt": 0, "col_cnt": 0, "conf_dist": {},
-                        "err": str(last_err or "")[:200]}
+        return [], [], {"parse_status": "fail", "error_type": "parse-fail",
+                        "dialect": None, "table_cnt": 0, "col_cnt": 0, "conf_dist": {},
+                        "target_table": "", "err": str(last_err or "")[:200]}
 
     def parse_multi(self, sql_parts, dataset_id):
         """多条 SQL(分号分隔/多节点)合并解析: 聚合并去重血缘边"""

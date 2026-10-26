@@ -1,0 +1,9 @@
+.git
+archive
+deploy
+logs
+__pycache__
+*.pyc
+_*.py
+.gitignore
+*.md
