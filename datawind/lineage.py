@@ -13,6 +13,8 @@
   lp = LineageParser()
   tbl, col, stat = lp.parse(dataset_id, sql)
 """
+import hashlib
+import json
 import logging
 
 try:
@@ -88,8 +90,7 @@ class LineageParser:
                     continue
                 if name in cte_names:
                     cte_table.add(name)
-                    if src.alias:
-                        cte_alias[src.alias] = name
+                    cte_alias[src.alias or name] = name
                     continue
                 real = ("%s.%s" % (src.db, name)) if src.db else name
                 if src.alias:
@@ -155,131 +156,81 @@ class LineageParser:
         return None, None, None
 
     def _resolve_src(self, src_expr, sel, cte_names, cte_defs, depth, memo):
-        """递归解析投影表达式 src_expr 的真实来源边列表 [(table, field, conf)]
-
-        规则:
-          - 带表前缀列: 真实表直连(high); 子查询/CTE 列引用 -> 递归进定义
-          - 无前缀列: 唯一真实表直连; 否则按 FROM 顺序递归子查询/CTE 投影; SELECT * 用底层唯一表兜底
-          - 无法归属(多表同名列且无定义): 丢弃, 不产裸列名噪音边
-          - 无列引用(常量/COUNT(*)): 唯一真实表/唯一*表 -> (表, '', medium); 否则不产
-          - 置信度: 最终表达式为直接列引用 high, 表达式/聚合/穿透后 medium
-        """
+        """返回 (真实表, 字段, 置信度, 转换路径)；路径按来源到目标排列。"""
         if depth > 8:
             return []
         alias_map, bare_tables, subq_map, cte_table, cte_alias, star_real = self._from_ctx(sel, cte_names)
         cols = list(src_expr.find_all(exp.Column))
-        resolved = []
-        seen = set()
-        for c in cols:
-            name, tbl_alias = c.name or "", c.table or ""
+        resolved, seen = [], set()
+
+        def add_refs(refs):
+            for item in refs:
+                table, field = item[0], item[1]
+                path = item[3] if len(item) > 3 else []
+                key = (table, field, tuple(path))
+                if table and key not in seen:
+                    seen.add(key)
+                    resolved.append((table, field, path))
+
+        def resolve_projection(inner, name, star_table):
+            expr2, owner2, star2 = self._find_projection(inner, name, cte_defs, star_table)
+            if expr2 is not None:
+                return self._resolve_src(expr2, owner2, cte_names, cte_defs, depth + 1, memo)
+            if star2:
+                return [(star2, name, "high", [])]
+            return []
+
+        for col in cols:
+            name, qualifier = col.name or "", col.table or ""
             if not name:
                 continue
-            if tbl_alias:
-                if tbl_alias in alias_map:
-                    ref = (alias_map[tbl_alias], name)
-                elif tbl_alias in subq_map:
-                    inner = subq_map[tbl_alias]
-                    expr2, owner2, star2 = self._find_projection(inner, name, cte_defs, star_real)
-                    if expr2 is not None:
-                        refs = self._resolve_src(expr2, owner2, cte_names, cte_defs,
-                                                 depth + 1, memo)
-                        if refs:
-                            ref = (refs[0][0], refs[0][1])
-                        else:
-                            continue
-                    elif star2:
-                        ref = (star2, name)
-                    else:
-                        continue
-                elif tbl_alias in cte_alias:
-                    # 别名实际是 CTE 引用(如 FROM reg r), 由别名映射定位 CTE 定义
-                    tname = cte_alias.get(tbl_alias)
-                    if tname and tname in cte_defs:
-                        inner = cte_defs[tname]
-                        expr2, owner2, star2 = self._find_projection(inner, name, cte_defs, self._star_of(inner))
-                        if expr2 is not None:
-                            refs = self._resolve_src(expr2, owner2, cte_names, cte_defs,
-                                                     depth + 1, memo)
-                            if refs:
-                                ref = (refs[0][0], refs[0][1])
-                            else:
-                                continue
-                        elif star2:
-                            ref = (star2, name)
-                        else:
-                            continue
-                    else:
-                        continue
-                else:
-                    continue  # 未知前缀, 丢弃
+            refs = []
+            if qualifier in alias_map:
+                refs = [(alias_map[qualifier], name, "high", [])]
+            elif qualifier in subq_map:
+                refs = resolve_projection(subq_map[qualifier], name, self._star_of(subq_map[qualifier]))
+            elif qualifier in cte_alias:
+                cte_name = cte_alias[qualifier]
+                if cte_name in cte_defs:
+                    refs = resolve_projection(cte_defs[cte_name], name, self._star_of(cte_defs[cte_name]))
+            elif qualifier:
+                # 未知前缀不猜来源。
+                refs = []
+            elif len(alias_map) == 0 and len(bare_tables) == 1 and not subq_map and not cte_table:
+                refs = [(bare_tables[0], name, "high", [])]
             else:
-                # 无前缀
-                if len(alias_map) == 0 and len(bare_tables) == 1 and not subq_map and not cte_table:
-                    ref = (bare_tables[0], name)
-                else:
-                    # 优先在子查询投影中找定义(按 FROM 顺序), 再 CTE
-                    found = False
-                    for alias, inner in subq_map.items():
-                        expr2, owner2, star2 = self._find_projection(inner, name, cte_defs,
-                                                                     self._star_of(inner))
-                        if expr2 is not None:
-                            refs = self._resolve_src(expr2, owner2, cte_names, cte_defs,
-                                                     depth + 1, memo)
-                            if refs:
-                                ref = (refs[0][0], refs[0][1])
-                            else:
-                                continue
-                            found = True
+                # 先按当前 SELECT 中的子查询投影解析，避免把不同作用域混在一起。
+                for inner in subq_map.values():
+                    refs = resolve_projection(inner, name, self._star_of(inner))
+                    if refs:
+                        break
+                if not refs:
+                    # CTE 投影作为兜底；保留表达式的全部来源字段。
+                    for cte_name in dict.fromkeys(cte_alias.values()):
+                        inner = cte_defs.get(cte_name)
+                        if inner is None:
+                            continue
+                        refs = resolve_projection(inner, name, self._star_of(inner))
+                        if refs:
                             break
-                        elif star2:
-                            ref = (star2, name)
-                            found = True
-                            break
-                    if not found:
-                        for tname, inner in cte_defs.items():
-                            expr2, owner2, star2 = self._find_projection(inner, name, cte_defs,
-                                                                         self._star_of(inner))
-                            if expr2 is not None:
-                                refs = self._resolve_src(expr2, owner2, cte_names, cte_defs,
-                                                         depth + 1, memo)
-                                if refs:
-                                    ref = (refs[0][0], refs[0][1])
-                                else:
-                                    continue
-                                found = True
-                                break
-                            elif star2:
-                                ref = (star2, name)
-                                found = True
-                                break
-                    if not found and self.schema is not None:
-                        # schema 消歧: 候选真实表(别名映射+裸表)中唯一包含该列 -> 确定归属
-                        cands = list(alias_map.values()) + bare_tables
-                        if cands:
-                            hits = self.schema.tables_with_column(name, cands)
-                            if len(hits) == 1:
-                                ref = (hits[0], name)
-                                found = True
-                    if not found:
-                        continue
-            key = (ref[0], ref[1])
-            if key in seen or not ref[0]:
-                continue
-            seen.add(key)
-            resolved.append(ref)
+                if not refs and self.schema is not None:
+                    candidates = list(alias_map.values()) + bare_tables
+                    hits = self.schema.tables_with_column(name, candidates) if candidates else []
+                    if len(hits) == 1:
+                        refs = [(hits[0], name, "high", [])]
+            add_refs(refs)
+
         if not resolved and not cols:
-            # 聚合/常量(COUNT(*)等): 归属唯一真实表或唯一*表
             if len(alias_map) == 0 and len(bare_tables) == 1 and not subq_map and not cte_table:
-                resolved.append((bare_tables[0], ""))
+                resolved.append((bare_tables[0], "", []))
             elif star_real and not subq_map and not cte_table:
-                resolved.append((star_real, ""))
-        # 置信度: src_expr 为纯 Column -> high; 否则 medium
+                resolved.append((star_real, "", []))
+
         is_direct = isinstance(src_expr, exp.Column) and len(cols) == 1
         conf = "high" if is_direct else "medium"
-        out = []
-        for t, f in resolved:
-            out.append((t, f, conf))
-        return out
+        expression = src_expr.sql() or ""
+        return [(table, field, conf, path + ([expression] if expression else []))
+                for table, field, path in resolved]
 
     def _star_edges(self, sel, cte_names):
         """顶层 SELECT * 展开: 用 schema 将 * 展开为 FROM 各真实表的列
@@ -310,7 +261,8 @@ class LineageParser:
                 if key in seen_col:
                     continue
                 seen_col.add(key)
-                edges.append((col, "%s.%s" % (t, col), "high"))
+                edges.append((col, "%s.%s" % (t, col), "high",
+                              json.dumps([["SELECT *"]], ensure_ascii=False)))
         else:
             for t, cset in cols_map.items():
                 for col in sorted(cset):
@@ -321,11 +273,12 @@ class LineageParser:
                               if any((c or "").lower() == key for c in cols_map[tt])]
                     if len(owners) == 1:
                         seen_col.add(key)
-                        edges.append((col, "%s.%s" % (owners[0], col), "high"))
+                        edges.append((col, "%s.%s" % (owners[0], col), "high",
+                                      json.dumps([["SELECT *"]], ensure_ascii=False)))
         return edges
 
     def _col_edges(self, ast, cte_names):
-        """AST -> [(target, src, confidence)] 字段血缘边(仅最终查询结果字段)
+        """AST -> (target, src, confidence, transform_path_json) 字段血缘边
 
         只取最外层顶层 SELECT 的投影列作为目标字段; 来源经 _resolve_src 递归穿透
         子查询/CTE/聚合, 真实表直连 high, 表达式/聚合/穿透 medium;
@@ -363,13 +316,13 @@ class LineageParser:
                     continue
                 resolved = self._resolve_src(src_expr, sel, cte_names, cte_defs, 0, memo)
                 seen = set()
-                for t, f, conf in resolved:
-                    key = (t, f, conf)
+                for t, f, conf, path in resolved:
+                    key = (t, f, conf, tuple(path))
                     if key in seen:
                         continue
                     seen.add(key)
                     ref = ("%s.%s" % (t, f)) if f else t
-                    edges.append((target, ref, conf))
+                    edges.append((target, ref, conf, json.dumps([path], ensure_ascii=False)))
         # 解析层去重保序(同 target/src/conf 只保留一条)
         seen_e = set()
         cols_dedup = []
@@ -384,7 +337,7 @@ class LineageParser:
         """解析单条加工 SQL -> (table_edges, column_edges, stat)
 
         table_edges: [{"db_table": str, "lineage_type": "direct"}]
-        column_edges: [{"target_field", "src_table", "src_field", "confidence"}]
+        column_edges: (target_field, source_ref, confidence, transform_path_json)
         stat: {"parse_status": ok/pending/fail, "error_type": no-sql/no-sqlglot/parse-fail/None,
                "dialect", "table_cnt", "col_cnt", "conf_dist", "target_table", "err"}
         target_table: INSERT/CTAS 的目标表(下游), 供 DS 任务血缘等场景使用; SELECT 场景为空
@@ -415,7 +368,7 @@ class LineageParser:
                 # CTE 名从整棵 AST 根收集(嵌套 WITH 也能覆盖), 供各层 Select 过滤
                 cte_names = {c.alias for c in ast.find_all(exp.CTE)}
                 cols = self._col_edges(ast, cte_names)
-                # 解析层去重保序(同 target/src/conf 只保留一条, 防嵌套层级重复产出)
+                # 解析层去重保序(同字段边及同处理路径只保留一条)
                 seen_e = set()
                 cols_dedup = []
                 for e in cols:
@@ -424,7 +377,7 @@ class LineageParser:
                         cols_dedup.append(e)
                 cols = cols_dedup
                 conf_dist = {}
-                for _, _, c in cols:
+                for _, _, c, _ in cols:
                     conf_dist[c] = conf_dist.get(c, 0) + 1
                 stat = {"parse_status": "ok", "error_type": None,
                         "dialect": dia or "default",
@@ -441,6 +394,7 @@ class LineageParser:
 
     def parse_multi(self, sql_parts, dataset_id):
         """多条 SQL(分号分隔/多节点)合并解析: 聚合并去重血缘边"""
+        sql_parts = sql_parts or ""
         all_tables, all_cols, stats = [], [], []
         for one in sql_parts.split(";"):
             one = one.strip()
@@ -453,16 +407,20 @@ class LineageParser:
         # 汇总
         tbl_set = sorted(set(all_tables))
         col_set = []
-        seen = set()
-        for t, s, c in all_cols:
+        path_map = {}
+        for t, s, c, paths_json in all_cols:
             key = (t, s, c)
-            if key not in seen:
-                seen.add(key)
-                col_set.append((t, s, c))
+            paths = json.loads(paths_json) if paths_json else []
+            merged = path_map.setdefault(key, [])
+            for path in paths:
+                if path not in merged:
+                    merged.append(path)
+        for (t, s, c), paths in path_map.items():
+            col_set.append((t, s, c, json.dumps(paths, ensure_ascii=False)))
         ok_n = sum(1 for s in stats if s["parse_status"] == "ok")
         fail_n = sum(1 for s in stats if s["parse_status"] == "fail")
         conf_dist = {}
-        for _, _, c in col_set:
+        for _, _, c, _ in col_set:
             conf_dist[c] = conf_dist.get(c, 0) + 1
         return (tbl_set, col_set,
                 {"parse_status": "ok" if fail_n == 0 and ok_n else
@@ -476,9 +434,9 @@ class LineageParser:
 def normalize_column_edge(edge, dataset_id):
     """字段血缘边 -> 落库行(拆 src_table 与 src_field)
 
-    edge: (target, src_ref, confidence); src_ref 形如 "tbl.col" 或 "col"
+    edge: (target, src_ref, confidence, transform_path_json); src_ref 形如 "tbl.col" 或 "col"
     """
-    target, src_ref, conf = edge
+    target, src_ref, conf, transform_path = edge
     src_table, src_field = "", ""
     if src_ref and "." in src_ref:
         src_table, src_field = src_ref.rsplit(".", 1)
@@ -486,4 +444,5 @@ def normalize_column_edge(edge, dataset_id):
         src_field = src_ref
     return {"dataset_id": dataset_id, "target_field": target,
             "src_table": src_table, "src_field": src_field,
-            "confidence": conf}
+            "confidence": conf, "transform_path": transform_path,
+            "transform_id": hashlib.sha256((transform_path or "[]").encode("utf-8")).hexdigest()}

@@ -38,6 +38,7 @@ TBL_CHANGE = "{db}.dwd_datawind_dataset_change_i_d"
 TBL_FOLDER = "{db}.dim_datawind_folder_s_d"
 TBL_TBL_LINEAGE = "{db}.dwd_datawind_table_lineage_t_d"
 TBL_COL_LINEAGE = "{db}.dwd_datawind_column_lineage_t_d"
+TBL_COL_LINEAGE_DETAIL = "{db}.dwd_datawind_column_lineage_detail_t_d"
 TBL_PARSE_STAT = "{db}.dwd_datawind_parse_stat_s_d"
 TBL_CLOSURE = "{db}.dwd_datawind_lineage_closure_t_d"
 TBL_DIMMET = "{db}.ods_datawind_dimmet_s_d"
@@ -72,7 +73,7 @@ def write_lineage(doris, stat_date, etl_time, dataset_sql_map, parser):
     dataset_sql_map: {dataset_id: (sql_logic, source_tables)}
     返回 stat 汇总 dict
     """
-    t_rows, c_rows = [], []
+    t_rows, c_rows, c_detail_rows = [], [], []
     stat = {"total": 0, "parsed": 0, "pending": 0, "fail": 0,
             "high": 0, "medium": 0, "pend_conf": 0, "t_edges": 0, "c_edges": 0}
     for dsid, (sql, srcs) in dataset_sql_map.items():
@@ -99,6 +100,9 @@ def write_lineage(doris, stat_date, etl_time, dataset_sql_map, parser):
             n = normalize_column_edge(edge, dsid)
             c_rows.append((stat_date, dsid, n["target_field"], n["src_table"],
                            n["src_field"], n["confidence"], etl_time))
+            c_detail_rows.append((stat_date, dsid, n["target_field"], n["src_table"],
+                                  n["src_field"], n["transform_id"],
+                                  n["transform_path"], n["confidence"], etl_time))
             if n["confidence"] == "high":
                 stat["high"] += 1
             elif n["confidence"] == "medium":
@@ -109,14 +113,21 @@ def write_lineage(doris, stat_date, etl_time, dataset_sql_map, parser):
         stat["c_edges"] += len(cols)
 
     # 落库(幂等: 先删当日分区再全量)
+    doris.exec("DELETE FROM %s WHERE dt = %%s" % TBL_TBL_LINEAGE.format(db=doris.db), (stat_date,))
     if t_rows:
-        doris.exec("DELETE FROM %s WHERE dt = %%s" % TBL_TBL_LINEAGE.format(db=doris.db), (stat_date,))
         sql_t = "INSERT INTO %s (dt, dataset_id, db_table, lineage_type, depth, etl_time) VALUES (%%s,%%s,%%s,%%s,%%s,%%s)" % TBL_TBL_LINEAGE.format(db=doris.db)
         doris.execmany(sql_t, t_rows)
+    doris.exec("DELETE FROM %s WHERE dt = %%s" % TBL_COL_LINEAGE.format(db=doris.db), (stat_date,))
     if c_rows:
-        doris.exec("DELETE FROM %s WHERE dt = %%s" % TBL_COL_LINEAGE.format(db=doris.db), (stat_date,))
         sql_c = "INSERT INTO %s (dt, dataset_id, target_field, src_table, src_field, confidence, etl_time) VALUES (%%s,%%s,%%s,%%s,%%s,%%s,%%s)" % TBL_COL_LINEAGE.format(db=doris.db)
         doris.execmany(sql_c, c_rows)
+    detail_table = TBL_COL_LINEAGE_DETAIL.format(db=doris.db)
+    doris.exec("DELETE FROM %s WHERE dt = %%s" % detail_table, (stat_date,))
+    if c_detail_rows:
+        sql_detail = ("INSERT INTO %s (dt, dataset_id, target_field, src_table, src_field, "
+                      "transform_id, transform_path, confidence, etl_time) "
+                      "VALUES (%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s)" % detail_table)
+        doris.execmany(sql_detail, c_detail_rows)
     # 解析统计
     doris.exec("DELETE FROM %s WHERE dt = %%s" % TBL_PARSE_STAT.format(db=doris.db), (stat_date,))
     sql_p = "INSERT INTO %s (dt, etl_time, total_cnt, parsed_cnt, pending_cnt, fail_cnt, high_conf_cnt, medium_conf_cnt, pending_conf_cnt, table_edge_cnt, column_edge_cnt) VALUES (%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s)" % TBL_PARSE_STAT.format(db=doris.db)
@@ -221,6 +232,7 @@ def main():
     doris.create_table(DDL_FOLDER.format(db=doris.db))
     doris.create_table(ddl_mod.DDL_TABLE_LINEAGE.format(db=doris.db))
     doris.create_table(ddl_mod.DDL_COLUMN_LINEAGE.format(db=doris.db))
+    doris.create_table(ddl_mod.DDL_COLUMN_LINEAGE_DETAIL.format(db=doris.db))
     doris.create_table(ddl_mod.DDL_PARSE_STAT.format(db=doris.db))
     doris.create_table(ddl_mod.DDL_CLOSURE.format(db=doris.db))
     doris.create_table(ddl_mod.DDL_DORIS_TABLE.format(db=doris.db))
@@ -232,7 +244,7 @@ def main():
     doris.create_table(ddl_mod.DDL_DASHBOARD.format(db=doris.db))
     doris.create_table(ddl_mod.DDL_REPORT_DATASET.format(db=doris.db))
     doris.create_table(ddl_mod.DDL_REPORT_DASHBOARD.format(db=doris.db))
-    print("==> 表已就绪: 快照/变更/文件夹/表血缘/字段血缘/解析统计/闭包/Doris表资产/Doris字段资产/DS调度资产/DS表间血缘/DataWind维度指标/图表/仪表盘/图表-数据集关联/图表-仪表盘关联")
+    print("==> 表已就绪: 快照/变更/文件夹/表血缘/字段血缘/字段转换明细/解析统计/闭包/Doris表资产/Doris字段资产/DS调度资产/DS表间血缘/DataWind维度指标/图表/仪表盘/图表-数据集关联/图表-仪表盘关联")
 
     # 文件夹树快照写入
     etl_time = time.strftime("%Y-%m-%d %H:%M:%S", _local_now())

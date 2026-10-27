@@ -271,7 +271,20 @@ def api_dataset_detail(dsid: int):
         if isinstance(f, dict) and f.get("name"):
             b = f.get("business")
             biz_map[f["name"]] = (b[0] if isinstance(b, list) and b else (b or ""))
-    fc = d.exec("SELECT target_field, src_table, src_field, confidence FROM etl.dwd_datawind_column_lineage_t_d WHERE dt=%s AND dataset_id=%s ORDER BY target_field", (dt, dsid), fetch=True)
+    try:
+        fc = d.exec("SELECT target_field, src_table, src_field, confidence, transform_path "
+                    "FROM etl.dwd_datawind_column_lineage_detail_t_d "
+                    "WHERE dt=%s AND dataset_id=%s ORDER BY target_field, src_table, src_field",
+                    (dt, dsid), fetch=True)
+    except Exception:
+        fc = []
+    # 新明细表部署前的历史快照仍从旧字段边表读取。
+    if not fc:
+        legacy = d.exec("SELECT target_field, src_table, src_field, confidence "
+                        "FROM etl.dwd_datawind_column_lineage_t_d "
+                        "WHERE dt=%s AND dataset_id=%s ORDER BY target_field",
+                        (dt, dsid), fetch=True)
+        fc = [tuple(r) + (None,) for r in legacy]
     info["field_lineage"] = []
     for r in fc:
         t, st, sf, conf = r[0], r[1] or "", r[2] or "", r[3]
@@ -280,8 +293,13 @@ def api_dataset_detail(dsid: int):
             continue
         if t == "*" or (t and t.isdigit()):
             continue
+        try:
+            transform_paths = json.loads(r[4]) if r[4] else []
+        except (TypeError, ValueError):
+            transform_paths = []
         info["field_lineage"].append({"target": t, "business": biz_map.get(t, ""),
-                                      "src_table": st, "src_field": sf, "conf": conf})
+                                      "src_table": st, "src_field": sf, "conf": conf,
+                                      "transform_paths": transform_paths})
     # 维度指标定义(dimMet): 数据集指标/维度清单含计算表达式, 展示指标口径
     md = d.exec("SELECT name, dim_met_variety, expr, field_list, data_type, dim_met_order "
                 "FROM etl.ods_datawind_dimmet_s_d WHERE dt=%s AND dataset_id=%s "

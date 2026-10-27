@@ -1,5 +1,6 @@
 # datawind-asset-center 本地 Docker Compose（开发/验证用）
 # 默认只起 web(18081); 需要轮询采集时: docker compose --profile poll up -d
+# 配置挂载 ./config:/app/config:ro, 改配置后 docker compose up -d 即生效, 无需重建镜像
 services:
   asset-center:
     build: .
@@ -9,6 +10,8 @@ services:
       - "18081:18081"
     environment:
       - TZ=Asia/Shanghai
+    volumes:
+      - ./config:/app/config:ro
     restart: unless-stopped
     profiles: ["web", "poll"]
 
@@ -19,6 +22,8 @@ services:
     command: ["python", "-u", "/app/poll_5min.py"]
     environment:
       - TZ=Africa/Lusaka
+    volumes:
+      - ./config:/app/config:ro
     restart: unless-stopped
     profiles: ["poll"]
 
@@ -29,5 +34,7 @@ services:
     command: ["python", "-u", "/app/ds_poll.py", "--interval", "300"]
     environment:
       - TZ=Africa/Lusaka
+    volumes:
+      - ./config:/app/config:ro
     restart: unless-stopped
     profiles: ["poll"]

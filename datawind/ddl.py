@@ -167,6 +167,33 @@ PROPERTIES (
 )
 """
 
+DDL_COLUMN_LINEAGE_DETAIL = """
+CREATE TABLE IF NOT EXISTS {db}.dwd_datawind_column_lineage_detail_t_d (
+    dt                  DATE         NOT NULL COMMENT '血缘快照日(分区键)',
+    dataset_id          BIGINT       NOT NULL COMMENT 'DataWind数据集ID',
+    target_field        VARCHAR(256) NOT NULL COMMENT '目标字段',
+    src_table           VARCHAR(256) NOT NULL COMMENT '来源表',
+    src_field           VARCHAR(256) NOT NULL COMMENT '来源字段; 常量或聚合可为空字符串',
+    transform_id        VARCHAR(64)  NOT NULL COMMENT '转换路径内容的SHA256, 用于区分同一字段边的不同处理路径',
+    transform_path      TEXT         COMMENT 'JSON路径: 来源字段到目标字段经过的SQL表达式列表',
+    confidence          VARCHAR(8)   COMMENT '血缘置信度',
+    etl_time            DATETIME     NOT NULL COMMENT '数据处理时间'
+) ENGINE=OLAP
+UNIQUE KEY(dt, dataset_id, target_field, src_table, src_field, transform_id)
+COMMENT 'DataWind字段血缘转换明细: 保存字段来源及从源到目标的SQL表达式路径'
+PARTITION BY RANGE(dt) ()
+DISTRIBUTED BY HASH(dataset_id) BUCKETS 8
+PROPERTIES (
+    "dynamic_partition.enable" = "true",
+    "dynamic_partition.time_unit" = "DAY",
+    "dynamic_partition.start" = "-180",
+    "dynamic_partition.end" = "3",
+    "dynamic_partition.prefix" = "p",
+    "dynamic_partition.replication_num" = "2",
+    "replication_num" = "2"
+)
+"""
+
 DDL_PARSE_STAT = """
 CREATE TABLE IF NOT EXISTS {db}.dwd_datawind_parse_stat_s_d (
     dt                  DATE         NOT NULL COMMENT '统计日(分区键)=抓取日',

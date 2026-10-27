@@ -43,6 +43,7 @@ TBL_CHANGE = "{db}.dwd_datawind_dataset_change_i_d"
 TBL_SNAPSHOT = "{db}.ods_datawind_dataset_s_d"
 TBL_TBL_LINEAGE = "{db}.dwd_datawind_table_lineage_t_d"
 TBL_COL_LINEAGE = "{db}.dwd_datawind_column_lineage_t_d"
+TBL_COL_LINEAGE_DETAIL = "{db}.dwd_datawind_column_lineage_detail_t_d"
 TBL_CLOSURE = "{db}.dwd_datawind_lineage_closure_t_d"
 
 # 熔断参数
@@ -266,9 +267,7 @@ def sync_lineage_incremental(client, doris, sync_map, logger):
                                 ", ".join(c[0] for c in extra_changes))
             except Exception as e:
                 logger.warning("血缘增量同步[%s] 实质变更检测失败: %s", dsid, e)
-            if not sql:
-                continue
-            tables, cols, st = parser.parse_multi(sql, dsid_int)
+            tables, cols, st = parser.parse_multi(sql or "", dsid_int)
         except Exception as e:
             logger.warning("血缘增量同步[%s] 解析异常: %s", dsid, e)
             continue
@@ -280,7 +279,7 @@ def sync_lineage_incremental(client, doris, sync_map, logger):
             s = s.strip()
             if s:
                 table_set.add(s)
-        t_rows, c_rows, cl_rows = [], [], []
+        t_rows, c_rows, c_detail_rows, cl_rows = [], [], [], []
         for t in sorted(table_set):
             db, tb = t.rsplit(".", 1) if "." in t else (None, t)
             t_rows.append((dt, dsid_int, t, "direct", 0, etl_time))
@@ -289,9 +288,13 @@ def sync_lineage_incremental(client, doris, sync_map, logger):
             n = normalize_column_edge(edge, dsid_int)
             c_rows.append((dt, dsid_int, n["target_field"], n["src_table"],
                            n["src_field"], n["confidence"], etl_time))
+            c_detail_rows.append((dt, dsid_int, n["target_field"], n["src_table"],
+                                  n["src_field"], n["transform_id"],
+                                  n["transform_path"], n["confidence"], etl_time))
         # 整集删除重插: 避免上游表集合收缩时旧 key 残留
         try:
-            for tbl in (TBL_TBL_LINEAGE, TBL_COL_LINEAGE, TBL_CLOSURE):
+            for tbl in (TBL_TBL_LINEAGE, TBL_COL_LINEAGE,
+                        TBL_COL_LINEAGE_DETAIL, TBL_CLOSURE):
                 doris.exec("DELETE FROM %s WHERE dt = %%s AND dataset_id = %%s"
                            % tbl.format(db=doris.db), (dt, dsid_int))
             if t_rows:
@@ -302,6 +305,12 @@ def sync_lineage_incremental(client, doris, sync_map, logger):
                 doris.execmany(
                     "INSERT INTO %s (dt, dataset_id, target_field, src_table, src_field, confidence, etl_time) "
                     "VALUES (%%s,%%s,%%s,%%s,%%s,%%s,%%s)" % TBL_COL_LINEAGE.format(db=doris.db), c_rows)
+            if c_detail_rows:
+                doris.execmany(
+                    "INSERT INTO %s (dt, dataset_id, target_field, src_table, src_field, "
+                    "transform_id, transform_path, confidence, etl_time) "
+                    "VALUES (%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s,%%s)"
+                    % TBL_COL_LINEAGE_DETAIL.format(db=doris.db), c_detail_rows)
             if cl_rows:
                 doris.execmany(
                     "INSERT INTO %s (dt, dataset_id, up_db, up_table, hop_depth, lineage_path, etl_time) "
@@ -446,6 +455,7 @@ def main():
         doris.create_table(ddl_mod.DDL_CHANGE.format(db=doris.db))
         doris.create_table(ddl_mod.DDL_TABLE_LINEAGE.format(db=doris.db))
         doris.create_table(ddl_mod.DDL_COLUMN_LINEAGE.format(db=doris.db))
+        doris.create_table(ddl_mod.DDL_COLUMN_LINEAGE_DETAIL.format(db=doris.db))
         doris.create_table(ddl_mod.DDL_CLOSURE.format(db=doris.db))
 
         baseline = load_baseline()
