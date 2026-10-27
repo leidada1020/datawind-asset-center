@@ -13,6 +13,7 @@
   lp = LineageParser()
   tbl, col, stat = lp.parse(dataset_id, sql)
 """
+import base64
 import hashlib
 import json
 import logging
@@ -20,10 +21,16 @@ import logging
 try:
     import sqlglot
     from sqlglot import exp
+    from sqlglot.lineage import lineage as sqlglot_column_lineage
+    from sqlglot.optimizer import build_scope
+    from sqlglot.optimizer.scope import find_all_in_scope
     SQLGLOT_AVAILABLE = True
 except ImportError:  # 部署环境未装 sqlglot 时降级（血缘解析失败不阻塞快照落库）
     sqlglot = None
     exp = None
+    sqlglot_column_lineage = None
+    build_scope = None
+    find_all_in_scope = None
     SQLGLOT_AVAILABLE = False
 
 logger = logging.getLogger("lineage")
@@ -166,11 +173,12 @@ class LineageParser:
         def add_refs(refs):
             for item in refs:
                 table, field = item[0], item[1]
+                conf = item[2] if len(item) > 2 else "medium"
                 path = item[3] if len(item) > 3 else []
-                key = (table, field, tuple(path))
+                key = (table, field, conf, tuple(path))
                 if table and key not in seen:
                     seen.add(key)
-                    resolved.append((table, field, path))
+                    resolved.append((table, field, conf, path))
 
         def resolve_projection(inner, name, star_table):
             expr2, owner2, star2 = self._find_projection(inner, name, cte_defs, star_table)
@@ -184,7 +192,7 @@ class LineageParser:
             name, qualifier = col.name or "", col.table or ""
             if not name:
                 continue
-            refs = []
+            refs, ambiguous = [], False
             if qualifier in alias_map:
                 refs = [(alias_map[qualifier], name, "high", [])]
             elif qualifier in subq_map:
@@ -200,37 +208,47 @@ class LineageParser:
                 refs = [(bare_tables[0], name, "high", [])]
             else:
                 # 先按当前 SELECT 中的子查询投影解析，避免把不同作用域混在一起。
+                candidate_groups = []
                 for inner in subq_map.values():
-                    refs = resolve_projection(inner, name, self._star_of(inner))
-                    if refs:
-                        break
-                if not refs:
-                    # CTE 投影作为兜底；保留表达式的全部来源字段。
-                    for cte_name in dict.fromkeys(cte_alias.values()):
-                        inner = cte_defs.get(cte_name)
-                        if inner is None:
-                            continue
-                        refs = resolve_projection(inner, name, self._star_of(inner))
-                        if refs:
-                            break
-                if not refs and self.schema is not None:
+                    group = resolve_projection(inner, name, self._star_of(inner))
+                    if group:
+                        candidate_groups.append(group)
+                # CTE 投影也参与唯一性判断，避免按遍历顺序猜同名字段来源。
+                for cte_name in dict.fromkeys(cte_alias.values()):
+                    inner = cte_defs.get(cte_name)
+                    if inner is not None:
+                        group = resolve_projection(inner, name, self._star_of(inner))
+                        if group:
+                            candidate_groups.append(group)
+                signatures = {
+                    tuple(sorted((r[0], r[1], r[2]) for r in group))
+                    for group in candidate_groups
+                }
+                if len(signatures) == 1 and candidate_groups:
+                    refs = [r for group in candidate_groups for r in group]
+                elif len(signatures) > 1:
+                    ambiguous = True
+                if not refs and not ambiguous and self.schema is not None:
                     candidates = list(alias_map.values()) + bare_tables
                     hits = self.schema.tables_with_column(name, candidates) if candidates else []
                     if len(hits) == 1:
                         refs = [(hits[0], name, "high", [])]
             add_refs(refs)
 
-        if not resolved and not cols:
+        has_star = any(isinstance(node, exp.Star) for node in src_expr.walk())
+        if not resolved and not cols and has_star:
             if len(alias_map) == 0 and len(bare_tables) == 1 and not subq_map and not cte_table:
-                resolved.append((bare_tables[0], "", []))
+                resolved.append((bare_tables[0], "", "medium", []))
             elif star_real and not subq_map and not cte_table:
-                resolved.append((star_real, "", []))
+                resolved.append((star_real, "", "medium", []))
 
         is_direct = isinstance(src_expr, exp.Column) and len(cols) == 1
         conf = "high" if is_direct else "medium"
         expression = src_expr.sql() or ""
-        return [(table, field, conf, path + ([expression] if expression else []))
-                for table, field, path in resolved]
+        return [(table, field,
+                 "high" if conf == "high" and inner_conf == "high" else "medium",
+                 path + ([expression] if expression else []))
+                for table, field, inner_conf, path in resolved]
 
     def _star_edges(self, sel, cte_names):
         """顶层 SELECT * 展开: 用 schema 将 * 展开为 FROM 各真实表的列
@@ -277,60 +295,282 @@ class LineageParser:
                                       json.dumps([["SELECT *"]], ensure_ascii=False)))
         return edges
 
-    def _col_edges(self, ast, cte_names):
-        """AST -> (target, src, confidence, transform_path_json) 字段血缘边
+    def _col_edges(self, ast, cte_names, dialect=None):
+        """Build field edges from SQLGlot's scope-aware lineage graph."""
+        edges, unresolved = [], []
+        query = ast.expression if isinstance(ast, (exp.Insert, exp.Create)) else ast
 
-        只取最外层顶层 SELECT 的投影列作为目标字段; 来源经 _resolve_src 递归穿透
-        子查询/CTE/聚合, 真实表直连 high, 表达式/聚合/穿透 medium;
-        无法归属的裸列名不再产出(消除"来源表为空"噪音, 根治结果列来自子查询时血缘归零)
-        """
-        edges = []
-        if isinstance(ast, exp.Select):
-            top_selects = [ast]
-        else:
-            top_selects = list(ast.find_all(exp.Select))[:1] or []
-        # CTE 定义映射(整棵 AST, 供递归穿透)
-        cte_defs = {}
-        for c in ast.find_all(exp.CTE):
-            if isinstance(c.this, exp.Select):
-                cte_defs[c.alias] = c.this
-        memo = {}
+        def set_branches(node):
+            if isinstance(node, (exp.Union, exp.Intersect, exp.Except)):
+                return set_branches(node.this) + set_branches(node.expression)
+            return [node] if isinstance(node, exp.Select) else []
+
+        top_selects = set_branches(query)
+        if not top_selects:
+            return [], []
+
+        # Keep schema-backed star expansion for queries whose output columns
+        # cannot be inferred without table metadata.
         for sel in top_selects:
-            # 顶层 SELECT *: schema 可用时按 FROM 真实表展开(单表全列/多表列名唯一消歧)
             if self.schema is not None and any(isinstance(p, exp.Star) for p in sel.expressions):
+                before_star = len(edges)
                 edges.extend(self._star_edges(sel, cte_names))
-            for proj in sel.expressions:
-                if isinstance(proj, exp.Star):
+                if len(edges) == before_star:
+                    unresolved.append("*")
+            elif any(isinstance(p, exp.Star) for p in sel.expressions):
+                unresolved.append("*")
+
+        targets, target_projection_idxs = [], []
+        for proj_idx, proj in enumerate(top_selects[0].expressions):
+            if isinstance(proj, exp.Star) or not list(proj.find_all(exp.Column)):
+                continue
+            target = proj.alias_or_name or proj.sql()
+            if target and target != "*":
+                targets.append(target)
+                target_projection_idxs.append(proj_idx)
+
+        cte_defs = {
+            cte.alias: cte.this
+            for cte in ast.find_all(exp.CTE)
+            if isinstance(cte.this, exp.Select)
+        }
+
+        try:
+            root_scope = build_scope(query)
+        except Exception as e:
+            logger.debug("Unable to build SQL scope for column lineage: %s", e)
+            root_scope = None
+        def add_leaf_paths(node, ancestors, target):
+            if node.downstream:
+                for child in node.downstream:
+                    add_leaf_paths(child, ancestors + [node], target)
+                return
+
+            predicates_by_step = []
+            using_dependencies = []
+            for step in ancestors:
+                source_select = step.source
+                if not isinstance(source_select, exp.Select):
                     continue
-                if isinstance(proj, exp.Alias):
-                    target = proj.alias or ""
-                    src_expr = proj.this
-                else:
-                    if isinstance(proj, exp.Column):
-                        src_expr = proj
-                        target = proj.name or ""
-                    else:
-                        src_expr = proj
-                        target = proj.sql() or ""
-                if not target:
-                    continue
-                resolved = self._resolve_src(src_expr, sel, cte_names, cte_defs, 0, memo)
-                seen = set()
-                for t, f, conf, path in resolved:
-                    key = (t, f, conf, tuple(path))
-                    if key in seen:
+                predicates = []
+                where = source_select.args.get("where")
+                if where is not None:
+                    predicates.append(("where", "WHERE条件", where.this))
+                for join_index, join in enumerate(source_select.args.get("joins") or []):
+                    on = join.args.get("on")
+                    if on is not None:
+                        predicates.append(("join", "JOIN ON条件", on))
+                    using = join.args.get("using") or []
+                    if using:
+                        predicates.append(("join", "JOIN USING口径", join))
+                        # USING columns belong to both sides of the join. Resolve
+                        # the right side by its alias; resolve the left side
+                        # against preceding sources with the schema-aware resolver.
+                        right = join.this
+                        right_alias = right.alias or right.name if isinstance(right, exp.Table) else ""
+                        prior_sources = ([source_select.args.get("from_")] +
+                                         (source_select.args.get("joins") or [])[:join_index])
+                        for using_col in using:
+                            using_name = using_col.name if hasattr(using_col, "name") else str(using_col)
+                            if not using_name:
+                                continue
+                            if right_alias:
+                                using_dependencies.append((source_select,
+                                    exp.column(using_name, table=right_alias), "join_using"))
+                            for prior in prior_sources:
+                                if prior is None:
+                                    continue
+                                prior_src = prior.this
+                                if isinstance(prior_src, exp.Table):
+                                    prior_alias = prior_src.alias or prior_src.name
+                                    using_dependencies.append((source_select,
+                                        exp.column(using_name, table=prior_alias), "join_using"))
+                having = source_select.args.get("having")
+                if having is not None:
+                    predicates.append(("having", "HAVING条件", having.this))
+                qualify = source_select.args.get("qualify")
+                if qualify is not None:
+                    predicates.append(("qualify", "QUALIFY条件", qualify.this))
+                group = source_select.args.get("group")
+                if group is not None:
+                    predicates.append(("group_by", "GROUP BY口径", group))
+                unique_predicates = []
+                seen_predicates = set()
+                for kind, label, expression in predicates:
+                    expression_sql = expression.sql(dialect=dialect)
+                    key = (kind, expression_sql)
+                    if key not in seen_predicates:
+                        seen_predicates.add(key)
+                        unique_predicates.append((kind, label, expression,
+                                                  expression_sql))
+                predicates_by_step.append((source_select, unique_predicates))
+
+            # Predicates change the row set or aggregation grain, so they are
+            # first-class dependencies of every output on this lineage path.
+            for source_select, predicates in predicates_by_step:
+                for kind, label, expression, expression_sql in predicates:
+                    if kind == "join" and label == "JOIN USING口径":
                         continue
-                    seen.add(key)
-                    ref = ("%s.%s" % (t, f)) if f else t
-                    edges.append((target, ref, conf, json.dumps([path], ensure_ascii=False)))
-        # 解析层去重保序(同 target/src/conf 只保留一条)
-        seen_e = set()
-        cols_dedup = []
-        for e in edges:
-            if e not in seen_e:
-                seen_e.add(e)
-                cols_dedup.append(e)
-        return cols_dedup
+                    columns = (find_all_in_scope(expression, exp.Column)
+                               if find_all_in_scope else expression.find_all(exp.Column))
+                    for column in columns:
+                        refs = self._resolve_src(column, source_select, cte_names,
+                                                 cte_defs, 0, {})
+                        if not refs:
+                            unresolved.append(target)
+                        for table, field, _, source_path in refs:
+                            if not field:
+                                continue
+                            src_ref = "%s.%s" % (table, field)
+                            dependency = "[口径依赖:%s] %s" % (kind, expression_sql)
+                            path = list(source_path) + [dependency]
+                            edges.append((target, src_ref, "medium",
+                                          json.dumps([path], ensure_ascii=False)))
+            for source_select, column, kind in using_dependencies:
+                refs = self._resolve_src(column, source_select, cte_names,
+                                         cte_defs, 0, {})
+                for table, field, _, source_path in refs:
+                    if field:
+                        dependency = "[口径依赖:%s] JOIN USING (%s)" % (kind, column.name)
+                        edges.append((target, "%s.%s" % (table, field), "medium",
+                                      json.dumps([list(source_path) + [dependency]],
+                                                 ensure_ascii=False)))
+
+            if not isinstance(node.expression, exp.Table):
+                unresolved.append(target)
+                return
+            if node.name == "*":
+                unresolved.append(target)
+                return
+            try:
+                field = sqlglot.parse_one(node.name, read=dialect).name
+            except Exception:
+                field = node.name.rsplit(".", 1)[-1].strip('`"')
+            table_expr = node.expression
+            table = ".".join(
+                part for part in
+                (table_expr.catalog, table_expr.db, table_expr.name) if part
+            )
+            if not table or not field:
+                return
+
+            path, is_direct = [], True
+            for step in reversed(ancestors):
+                if (isinstance(query, (exp.Union, exp.Intersect, exp.Except))
+                        and step.name in ("UNION", "INTERSECT", "EXCEPT")):
+                    continue
+                for predicate_select, predicates in predicates_by_step:
+                    if predicate_select is step.source:
+                        for _, label, _, expression_sql in predicates:
+                            context = "%s: %s" % (label, expression_sql)
+                            if context not in path:
+                                path.append(context)
+                expression = step.expression
+                expression_sql = expression.sql(dialect=dialect)
+                if not path or path[-1] != expression_sql:
+                    path.append(expression_sql)
+                if isinstance(expression, exp.Alias):
+                    expression = expression.this
+                is_direct = is_direct and isinstance(expression, exp.Column)
+            confidence = "high" if is_direct else "medium"
+            src_ref = "%s.%s" % (table, field)
+            edges.append((target, src_ref, confidence,
+                          json.dumps([path], ensure_ascii=False)))
+
+        def add_legacy_edges(target, projection_idx):
+            fully_resolved = True
+            known_sources = {edge[1] for edge in edges if edge[0] == target}
+            for sel in top_selects:
+                if projection_idx >= len(sel.expressions):
+                    fully_resolved = False
+                    continue
+                proj = sel.expressions[projection_idx]
+                src_expr = proj.this if isinstance(proj, exp.Alias) else proj
+                source_columns = list(src_expr.find_all(exp.Column))
+                for column in source_columns:
+                    if not self._resolve_src(column, sel, cte_names, cte_defs, 0, {}):
+                        fully_resolved = False
+                for table, field, confidence, path in self._resolve_src(
+                        src_expr, sel, cte_names, cte_defs, 0, {}):
+                    src_ref = "%s.%s" % (table, field) if field else table
+                    if src_ref in known_sources:
+                        continue
+                    known_sources.add(src_ref)
+                    edges.append((target, src_ref, confidence,
+                                  json.dumps([path], ensure_ascii=False)))
+            return fully_resolved
+
+        for target_idx, target in enumerate(targets):
+            count_before = len(edges)
+            if root_scope is not None and sqlglot_column_lineage is not None:
+                try:
+                    target_expr = exp.column(target)
+                    target_expr.this.meta["case_sensitive"] = True
+                    lineage_root = sqlglot_column_lineage(
+                        target_expr, query, schema=None, dialect=dialect,
+                        scope=root_scope, trim_selects=False, copy=False,
+                    )
+                    add_leaf_paths(lineage_root, [], target)
+                except Exception as e:
+                    logger.debug("Column lineage failed for %s: %s", target, e)
+
+            # The original resolver can use Doris column snapshots to repair
+            # unresolved or ambiguous leaves from the SQLGlot graph.
+            if len(edges) == count_before or target in unresolved:
+                projection_idx = target_projection_idxs[target_idx]
+                if add_legacy_edges(target, projection_idx):
+                    unresolved[:] = [field for field in unresolved if field != target]
+                elif target not in unresolved:
+                    unresolved.append(target)
+
+        deduped, seen = [], set()
+        for edge in edges:
+            if edge not in seen:
+                seen.add(edge)
+                deduped.append(edge)
+        deduped.sort(key=lambda edge: (edge[0], edge[1], edge[2], edge[3]))
+        stage_label = None
+        for comment in _collect_node_meta_comments(ast):
+            comment = comment.strip()
+            marker = "DATAWIND_NODE_META:"
+            if not comment.startswith(marker):
+                continue
+            token = comment[len(marker):].strip()
+            try:
+                token += "=" * (-len(token) % 4)
+                node_meta = json.loads(base64.urlsafe_b64decode(token).decode("utf-8"))
+                order = node_meta.get("order")
+                name = node_meta.get("name") or ""
+                node_type = node_meta.get("type") or ""
+                node_id = node_meta.get("id") or ""
+                label = "DataWind节点%s" % (order or "")
+                if name:
+                    label += ":" + str(name)
+                if node_type:
+                    label += " / " + str(node_type)
+                if node_id:
+                    label += " (#%s)" % node_id
+                stage_label = label
+            except (ValueError, TypeError, UnicodeDecodeError):
+                logger.debug("Ignoring malformed DataWind node metadata")
+            break
+        if stage_label:
+            staged_edges = []
+            for target, source, confidence, paths_json in deduped:
+                try:
+                    paths = json.loads(paths_json) if paths_json else []
+                except (TypeError, ValueError):
+                    paths = []
+                staged_paths = []
+                for path in paths:
+                    path = list(path) if isinstance(path, list) else [str(path)]
+                    if not path or path[0] != stage_label:
+                        path.insert(0, stage_label)
+                    staged_paths.append(path)
+                staged_edges.append((target, source, confidence,
+                                     json.dumps(staged_paths, ensure_ascii=False)))
+            deduped = staged_edges
+        return deduped, sorted(set(unresolved))
 
     # ---------- 主入口 ----------
     def parse(self, dataset_id, sql):
@@ -367,7 +607,7 @@ class LineageParser:
                 tables = sorted(self._tables(ast))
                 # CTE 名从整棵 AST 根收集(嵌套 WITH 也能覆盖), 供各层 Select 过滤
                 cte_names = {c.alias for c in ast.find_all(exp.CTE)}
-                cols = self._col_edges(ast, cte_names)
+                cols, unresolved_fields = self._col_edges(ast, cte_names, dia)
                 # 解析层去重保序(同字段边及同处理路径只保留一条)
                 seen_e = set()
                 cols_dedup = []
@@ -379,10 +619,11 @@ class LineageParser:
                 conf_dist = {}
                 for _, _, c, _ in cols:
                     conf_dist[c] = conf_dist.get(c, 0) + 1
-                stat = {"parse_status": "ok", "error_type": None,
+                stat = {"parse_status": "partial" if unresolved_fields else "ok", "error_type": None,
                         "dialect": dia or "default",
                         "table_cnt": len(tables), "col_cnt": len(cols),
                         "conf_dist": conf_dist, "target_table": target_table,
+                        "unresolved_fields": unresolved_fields,
                         "err": None}
                 return tables, cols, stat
             except Exception as e:
@@ -396,7 +637,19 @@ class LineageParser:
         """多条 SQL(分号分隔/多节点)合并解析: 聚合并去重血缘边"""
         sql_parts = sql_parts or ""
         all_tables, all_cols, stats = [], [], []
-        for one in sql_parts.split(";"):
+        try:
+            statements = sqlglot.parse(sql_parts, read="doris") if SQLGLOT_AVAILABLE else [sql_parts]
+        except Exception:
+            # Preserve the original text as one statement so parse() reports the syntax error.
+            statements = [sql_parts]
+        active_node_comment = None
+        for statement in statements:
+            node_comments = [c.strip() for c in _collect_node_meta_comments(statement)]
+            if node_comments:
+                active_node_comment = node_comments[-1]
+            one = statement.sql(dialect="doris") if hasattr(statement, "sql") else str(statement)
+            if active_node_comment and not node_comments:
+                one = "/* %s */\n%s" % (active_node_comment, one)
             one = one.strip()
             if not one:
                 continue
@@ -417,18 +670,41 @@ class LineageParser:
                     merged.append(path)
         for (t, s, c), paths in path_map.items():
             col_set.append((t, s, c, json.dumps(paths, ensure_ascii=False)))
-        ok_n = sum(1 for s in stats if s["parse_status"] == "ok")
+        ok_n = sum(1 for s in stats if s["parse_status"] in ("ok", "partial"))
         fail_n = sum(1 for s in stats if s["parse_status"] == "fail")
+        partial_n = sum(1 for s in stats if s["parse_status"] == "partial")
+        unresolved_fields = sorted({f for s in stats for f in s.get("unresolved_fields", [])})
         conf_dist = {}
         for _, _, c, _ in col_set:
             conf_dist[c] = conf_dist.get(c, 0) + 1
         return (tbl_set, col_set,
-                {"parse_status": "ok" if fail_n == 0 and ok_n else
-                 ("fail" if fail_n > ok_n else "partial"),
+                {"parse_status": "partial" if partial_n or fail_n else
+                 ("ok" if ok_n else "fail"),
                  "statements": len(stats), "ok_n": ok_n, "fail_n": fail_n,
+                 "partial_n": partial_n, "unresolved_fields": unresolved_fields,
                  "dialect": stats[0].get("dialect") if stats else None,
                  "table_cnt": len(tbl_set), "col_cnt": len(col_set),
                  "conf_dist": conf_dist})
+
+
+def _collect_node_meta_comments(node):
+    """Collect DATAWIND_NODE_META comments across the whole AST.
+
+    SQLGlot may attach a leading comment to the statement, the WITH clause or
+    another inner node depending on the original SQL shape, so walk all nodes
+    instead of only reading statement-level comments. ``node`` can be a plain
+    string when sqlglot.parse fails (syntax-error fallback keeps the raw text).
+    """
+    found = []
+    candidates = list(getattr(node, "comments", None) or [])
+    if hasattr(node, "walk"):
+        for child in node.walk():
+            candidates.extend(getattr(child, "comments", None) or [])
+    for c in candidates:
+        c = str(c).strip()
+        if c.startswith("DATAWIND_NODE_META:"):
+            found.append(c)
+    return found
 
 
 def normalize_column_edge(edge, dataset_id):

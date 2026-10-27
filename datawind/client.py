@@ -11,14 +11,18 @@
   - lineage          : lineage 血缘接口（预留 P1）
 仅 urllib，无第三方依赖。
 """
+import base64
 import json
 import os
+import re
 import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 class DataWindClient:
+    _NODE_META_RE = re.compile(r"/\*\s*DATAWIND_NODE_META:[A-Za-z0-9_=-]+\s*\*/\s*")
+
     def __init__(self, cfg, jwt=None, timeout=180):
         self.cfg = cfg
         self.base = cfg["api_base"].rstrip("/")
@@ -129,7 +133,7 @@ class DataWindClient:
             nc = [nc]
         sql_parts, srcs, fields = [], [], []
         data_source = None
-        for node in nc:
+        for node_index, node in enumerate(nc, start=1):
             if not isinstance(node, dict):
                 continue
             if data_source is None:
@@ -142,7 +146,19 @@ class DataWindClient:
                                    "db": node.get("displayDbName") or node.get("dbName") or ""}
             q = node.get("query")
             if q:
-                sql_parts.append(str(q))
+                node_meta = {
+                    "order": node_index,
+                    "id": node.get("nodeId") or node.get("id") or "",
+                    "name": (node.get("nodeName") or node.get("name") or
+                             node.get("title") or node.get("displayName") or ""),
+                    "type": node.get("nodeType") or node.get("type") or "",
+                }
+                meta_token = base64.urlsafe_b64encode(
+                    json.dumps(node_meta, ensure_ascii=False).encode("utf-8")
+                ).decode("ascii").rstrip("=")
+                sql_parts.append(
+                    "/* DATAWIND_NODE_META:%s */\n%s" % (meta_token, str(q))
+                )
             for st in node.get("sourceTableList") or []:
                 db = (st.get("dbName") or "").strip()
                 tb = (st.get("tableName") or "").strip()
@@ -157,6 +173,11 @@ class DataWindClient:
                 ", ".join(sorted(set(srcs))),
                 json.dumps(fields, ensure_ascii=False),
                 data_source)
+
+    @classmethod
+    def clean_model_sql(cls, sql):
+        """Remove parser-only node annotations before SQL is stored or displayed."""
+        return cls._NODE_META_RE.sub("", sql or "").strip()
 
     # ---------- 维度指标 ----------
     def dim_met(self, dsid):

@@ -238,6 +238,7 @@ def sync_lineage_incremental(client, doris, sync_map, logger):
             except Exception as e:
                 logger.warning("血缘增量同步[%s] 拉取加工SQL失败: %s", dsid, e)
                 continue
+            stored_sql = client.clean_model_sql(sql)
             # 实质变更检测: 对比当日快照 -> 加工逻辑变化/数据源切换(仅mtime变化不记录)
             try:
                 old = doris.exec(
@@ -249,7 +250,7 @@ def sync_lineage_incremental(client, doris, sync_map, logger):
                 meta_mtime = (meta or {}).get("mtime") or ""
                 if old_row is not None:
                     old_sql = (old_row[0] or "").strip()
-                    new_sql = (sql or "").strip()
+                    new_sql = stored_sql
                     if old_sql and new_sql and old_sql != new_sql:
                         extra_changes.append(("logic_changed", dsid_int, (meta or {}).get("name") or "",
                                               {"sql_logic": {"old": old_sql[:2000], "new": new_sql[:2000]}},
@@ -330,7 +331,7 @@ def sync_lineage_incremental(client, doris, sync_map, logger):
                 "data_source_type=%%s, data_source_id=%%s, cluster_name=%%s, source_db=%%s, "
                 "mtime=%%s, etl_time=%%s WHERE dt=%%s AND dataset_id=%%s"
                 % TBL_SNAPSHOT.format(db=doris.db),
-                (sql or "", srcs or "", field_list or "",
+                (stored_sql, srcs or "", field_list or "",
                  ds_t or "", ds_id, ds_cl or "", ds_db or "",
                  (meta or {}).get("mtime") or "", etl_time, dt, dsid_int))
             logger.info("快照准实时[%s] 更新加工SQL/来源表/字段清单/数据源", dsid)

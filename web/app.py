@@ -16,6 +16,7 @@ FastAPI 只读服务: 查 Doris 当日分区, 提供
 import datetime
 import functools
 import json
+import logging
 import os
 import sys
 import threading
@@ -34,6 +35,7 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(BASE, "static")
 
 app = FastAPI(title="DataWind 资产中心", version="0.1.0")
+logger = logging.getLogger("datawind.web")
 
 
 # ---------------- 性能: 连接单例 + TTL 缓存 ----------------
@@ -276,7 +278,8 @@ def api_dataset_detail(dsid: int):
                     "FROM etl.dwd_datawind_column_lineage_detail_t_d "
                     "WHERE dt=%s AND dataset_id=%s ORDER BY target_field, src_table, src_field",
                     (dt, dsid), fetch=True)
-    except Exception:
+    except Exception as e:
+        logger.warning("字段血缘明细表查询失败, dataset_id=%s: %s", dsid, e)
         fc = []
     # 新明细表部署前的历史快照仍从旧字段边表读取。
     if not fc:
@@ -297,9 +300,15 @@ def api_dataset_detail(dsid: int):
             transform_paths = json.loads(r[4]) if r[4] else []
         except (TypeError, ValueError):
             transform_paths = []
+        dependency_type = ("row_context" if any(
+            "[口径依赖:" in str(item)
+            for path in transform_paths if isinstance(path, list)
+            for item in path
+        ) else "value")
         info["field_lineage"].append({"target": t, "business": biz_map.get(t, ""),
                                       "src_table": st, "src_field": sf, "conf": conf,
-                                      "transform_paths": transform_paths})
+                                      "transform_paths": transform_paths,
+                                      "dependency_type": dependency_type})
     # 维度指标定义(dimMet): 数据集指标/维度清单含计算表达式, 展示指标口径
     md = d.exec("SELECT name, dim_met_variety, expr, field_list, data_type, dim_met_order "
                 "FROM etl.ods_datawind_dimmet_s_d WHERE dt=%s AND dataset_id=%s "

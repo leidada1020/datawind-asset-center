@@ -78,23 +78,25 @@ def write_lineage(doris, stat_date, etl_time, dataset_sql_map, parser):
             "high": 0, "medium": 0, "pend_conf": 0, "t_edges": 0, "c_edges": 0}
     for dsid, (sql, srcs) in dataset_sql_map.items():
         sql = (sql or "").strip()
+        # API 来源表仍是有效表级血缘，即使数据集没有可解析 SQL。
+        table_set = {s.strip() for s in (srcs or "").split(",") if s.strip()}
         if not sql:
             stat["pending"] += 1
+            for t in sorted(table_set):
+                t_rows.append((stat_date, dsid, t, "direct", 0, etl_time))
+            stat["t_edges"] += len(table_set)
             continue
         stat["total"] += 1
         tables, cols, st = parser.parse_multi(sql, dsid)
+        table_set.update(tables)
+        for t in sorted(table_set):
+            t_rows.append((stat_date, dsid, t, "direct", 0, etl_time))
+        stat["t_edges"] += len(table_set)
         if st["parse_status"] == "fail":
             stat["fail"] += 1
             continue
         stat["parsed"] += 1
         # 表级边: SQLGlot 解析 + 接口 sourceTableList 合并
-        table_set = set(tables)
-        for s in (srcs or "").split(","):
-            s = s.strip()
-            if s:
-                table_set.add(s)
-        for t in sorted(table_set):
-            t_rows.append((stat_date, dsid, t, "direct", 0, etl_time))
         # 字段级边
         for edge in cols:
             n = normalize_column_edge(edge, dsid)
@@ -109,7 +111,6 @@ def write_lineage(doris, stat_date, etl_time, dataset_sql_map, parser):
                 stat["medium"] += 1
             else:
                 stat["pend_conf"] += 1
-        stat["t_edges"] += len(table_set)
         stat["c_edges"] += len(cols)
 
     # 落库(幂等: 先删当日分区再全量)
@@ -268,8 +269,11 @@ def main():
         d["confidentiality"] = inf.get("confidentiality") or ""
         mdl = model_map.get(i)
         if mdl:
-            d["sql_logic"], d["source_tables"], d["field_list"], ds_src = mdl
+            raw_sql, d["source_tables"], d["field_list"], ds_src = mdl
+            d["lineage_sql_logic"] = raw_sql
+            d["sql_logic"] = client.clean_model_sql(raw_sql)
         else:
+            d["lineage_sql_logic"] = None
             d["sql_logic"], d["source_tables"], d["field_list"], ds_src = None, None, None, None
         if ds_src:
             d["data_source_type"] = ds_src.get("type")
@@ -331,7 +335,8 @@ def main():
             from datawind.schema_provider import DorisSchemaProvider
             parser = LineageParser(schema_provider=DorisSchemaProvider(doris, ttl=300))
             print("==> SQLGlot 血缘解析落库 (schema-aware) ...")
-            ds_sql_map = {i: (d.get("sql_logic"), d.get("source_tables"))
+            ds_sql_map = {i: (d.get("lineage_sql_logic") or d.get("sql_logic"),
+                              d.get("source_tables"))
                           for i, d in current.items()}
             lineage_stat = write_lineage(doris, stat_date, etl_time, ds_sql_map, parser)
             print("    解析统计: 有SQL=%d 成功=%d 直连/无SQL=%d 失败=%d | "

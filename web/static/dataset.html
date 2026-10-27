@@ -396,11 +396,14 @@ async function loadDetail(dsid){
     const biz = f.business && f.business !== f.target ? f.business + ' (' + f.target + ')' : (f.target || '');
     const paths = (f.transform_paths || []).map(p => Array.isArray(p) ? p.join(' → ') : String(p)).filter(Boolean);
     const transforms = paths.length ? paths.map(p => `<div>${esc(p)}</div>`).join('') : '<span class="sub">表达式未采集</span>';
+    const dependency = f.dependency_type === 'row_context'
+      ? '<span class="badge warn" title="该字段参与过滤、关联或分组口径">行集/分组口径</span>'
+      : '<span class="badge">值计算</span>';
     return `<tr><td>${esc(biz)}</td><td>${esc(f.src_table)}</td><td>${esc(f.src_field)}</td>
-    <td style="min-width:260px;word-break:break-word">${transforms}</td>
+    <td>${dependency}</td><td style="min-width:260px;word-break:break-word">${transforms}</td>
     <td><span class="conf ${f.conf}">${f.conf}</span></td></tr>`;
   }).join('') ||
-    '<tr><td colspan="5" class="empty">无字段级血缘</td></tr>';
+    '<tr><td colspan="6" class="empty">无字段级血缘</td></tr>';
 
   // 字段清单
   const flds = (d.fields || []).map(f => `<tr><td>${esc(f.name)}</td><td>${esc(f.business)}</td><td>${esc(f.type)}</td></tr>`).join('') ||
@@ -505,7 +508,7 @@ async function loadDetail(dsid){
       <div id="lineage-svg-wrap">${treeSvg}</div>
     </div>
     <div class="panel"><h2>字段级血缘（${fl.length} 条）</h2>
-      <div style="overflow-x:auto;"><table><thead><tr><th>目标字段</th><th>来源表</th><th>来源字段</th><th>处理表达式路径</th><th>置信度</th></tr></thead>
+      <div style="overflow-x:auto;"><table><thead><tr><th>目标字段</th><th>来源表</th><th>来源字段</th><th>依赖类型</th><th>处理表达式路径</th><th>置信度</th></tr></thead>
       <tbody>${flRows}</tbody></table></div>
     </div>
     <div class="panel"><h2>字段清单</h2>
