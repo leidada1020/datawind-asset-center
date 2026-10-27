@@ -171,6 +171,47 @@ class DataWindClient:
         dims = data.get("dimMetList") or []
         return dims if isinstance(dims, list) else []
 
+    # ---------- 可视化资产(图表/仪表盘) ----------
+    def report_list(self):
+        """图表(自助分析 dataQuery)列表: 全部图表元数据(id/name/url/owner/ctime/mtime)
+        来源: POST /api/v3/open/metadata/reportList?appId= (官方文档: 不传reportIdList返回项目下所有图表)"""
+        r = self.http_json("/api/v3/open/metadata/reportList", "POST",
+                           {"appId": self.app_id}, timeout=180)
+        data = r.get("data")
+        return data if isinstance(data, list) else []
+
+    def dashboard_list(self):
+        """仪表盘列表: 全部仪表盘元数据(id/name/url/owner/rootId/ctime/mtime)
+        来源: POST /api/v3/open/metadata/dashboardList?appId= (rootId: 0=公共 1=个人)"""
+        r = self.http_json("/api/v3/open/metadata/dashboardList", "POST",
+                           {"appId": self.app_id}, timeout=120)
+        data = r.get("data")
+        return data if isinstance(data, list) else []
+
+    def report_dataset(self):
+        """图表关联的数据集: {reportId: [dataset...]} (图表->上游数据集映射)
+        来源: POST /api/v3/open/metadata/reportDataset (needSyncInfo/needUpstreamInfo=False 提速)
+        返回 dict 或 None(失败)"""
+        try:
+            r = self.http_json("/api/v3/open/metadata/reportDataset", "POST",
+                               {"appId": self.app_id, "needSyncInfo": False,
+                                "needUpstreamInfo": False}, timeout=300)
+            data = r.get("data")
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+
+    def report_dashboard(self):
+        """图表所属仪表盘: {reportId: [dashboard...]} (图表->所属看板映射)
+        来源: POST /api/v3/open/metadata/reportDashboard"""
+        try:
+            r = self.http_json("/api/v3/open/metadata/reportDashboard", "POST",
+                               {"appId": self.app_id}, timeout=120)
+            data = r.get("data")
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+
     # ---------- 并发批量 ----------
     def batch_fetch(self, ids, fetch_fn, max_workers=8):
         """并发抓取，单项失败返回 None/{}（不中断整体）"""

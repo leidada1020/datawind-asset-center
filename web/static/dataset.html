@@ -422,10 +422,11 @@ async function loadDetail(dsid){
   </li>`).join('') + '</ul>').join('') ||
     '<div class="empty">暂无变更历史</div>';
 
-  // 维度指标(dimMet): 指标(variety=2)为聚合列, 维度(variety=1)为分组列
+  // 维度指标(dimMet): 指标(variety=2)为聚合列, 维度(variety=1)为分组列, 普通字段(variety=0)为模型字段
   const mds = d.metric_defs || [];
   const mItems = mds.filter(m => m.variety === 2);
   const dItems = mds.filter(m => m.variety === 1);
+  const fItems = mds.filter(m => m.variety === 0);
   const metRow = m => `<tr><td>${esc(m.name)}</td><td>${esc(m.type)}</td>
     <td><code style="font-size:12px;color:var(--main);word-break:break-all;">${esc(m.expr)}</code></td>
     <td title="${esc(m.fields)}">${esc(String(m.fields||'').slice(0,40))}</td></tr>`;
@@ -435,7 +436,19 @@ async function loadDetail(dsid){
        <tbody>${arr.map(metRow).join('')}</tbody></table></div></div>`
     : '';
   const aggPanel = metHtml('聚合列（指标）', mItems, 'dimMet variety=2') +
-                   metHtml('维度列（分组）', dItems, 'dimMet variety=1');
+                   metHtml('维度列（分组）', dItems, 'dimMet variety=1') +
+                   metHtml('模型字段（dimMet 定义）', fItems, 'dimMet variety=0 · DataWind 侧字段定义');
+
+  // 下游图表: 该数据集被哪些图表(dataQuery)引用 + 图表归属仪表盘
+  const reps = d.downstream_reports || [];
+  const repRow = r => `<tr><td>${esc(r.name)}</td><td>${esc(String(r.report_id))}</td>
+    <td>${(r.dashboards||[]).map(x=>esc(x.name)).join('<br>') || '<span style="color:var(--sub)">未挂仪表盘</span>'}</td>
+    <td>${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener">打开 →</a>` : '-'}</td></tr>`;
+  const repPanel = reps.length
+    ? `<div class="panel"><h2>下游图表（${reps.length} 个）<span style="font-weight:400;font-size:12px;color:var(--sub);margin-left:8px;">消费该数据集的 DataWind 图表</span></h2>
+       <div style="overflow-x:auto;"><table><thead><tr><th>图表名</th><th>图表ID</th><th>所属仪表盘</th><th>跳转</th></tr></thead>
+       <tbody>${reps.map(repRow).join('')}</tbody></table></div></div>`
+    : '';
 
   const kv = (k, v) => `<div><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`;
 
@@ -498,6 +511,7 @@ async function loadDetail(dsid){
     </div>
     <div class="panel"><h2>加工 SQL</h2><pre>${esc(d.sql_logic || '（无加工SQL / 直连）')}</pre></div>
     ${aggPanel}
+    ${repPanel}
     <div class="panel"><h2>变更时间线 <span style="font-weight:400;font-size:12px;color:var(--sub);margin-left:8px;">近 ${chgCnt} 条 · 按检测日分组</span></h2>${ch}</div>`;
 
   // 更新当前选中态 + URL(便于刷新/分享)

@@ -113,6 +113,9 @@ def api_stats():
         ("closure_edges", "etl.dwd_datawind_lineage_closure_t_d"),
         ("doris_tables", "etl.ods_doris_table_s_d"),
         ("doris_columns", "etl.ods_doris_column_s_d"),
+        ("reports", "etl.ods_datawind_report_s_d"),
+        ("dashboards", "etl.ods_datawind_dashboard_s_d"),
+        ("report_dataset_edges", "etl.ods_datawind_report_dataset_t_d"),
     ]:
         r = d.exec("SELECT COUNT(*) FROM %s WHERE dt=%%s" % tbl, (dt,), fetch=True)
         out[k] = r[0][0] if r else 0
@@ -286,6 +289,27 @@ def api_dataset_detail(dsid: int):
     info["metric_defs"] = [{"name": r[0], "variety": r[1], "expr": r[2] or "",
                             "fields": r[3] or "", "type": r[4] or "",
                             "order": r[5]} for r in md]
+    # 下游图表(该数据集被哪些图表引用) + 图表所属仪表盘: 数据集 -> 图表 -> 仪表盘 消费链
+    dr = d.exec("SELECT r.report_id, r.report_name, r.etl_time, p.url "
+                "FROM etl.ods_datawind_report_dataset_t_d r "
+                "LEFT JOIN etl.ods_datawind_report_s_d p ON p.dt=r.dt AND p.report_id=r.report_id "
+                "WHERE r.dt=%s AND r.dataset_id=%s "
+                "ORDER BY r.report_name", (dt, dsid), fetch=True)
+    info["downstream_reports"] = []
+    if dr:
+        rid_ph = ",".join(["%s"] * len(dr))
+        rb = d.exec("SELECT r2.report_id, r2.dashboard_id, r2.dashboard_name "
+                    "FROM etl.ods_datawind_report_dashboard_t_d r2 "
+                    "WHERE r2.dt=%s AND r2.report_id IN (" + rid_ph + ") "
+                    "ORDER BY r2.report_id, r2.dashboard_name",
+                    (dt, *(x[0] for x in dr)), fetch=True)
+        dash_map = {}
+        for x in rb:
+            dash_map.setdefault(x[0], []).append({"dashboard_id": x[1], "name": x[2]})
+        for x in dr:
+            info["downstream_reports"].append({"report_id": x[0], "name": x[1],
+                                               "url": x[3] or "",
+                                               "dashboards": dash_map.get(x[0], [])})
     # 变更历史(该数据集)
     ch = d.exec("SELECT dt, change_type, change_type_name, changed_fields, diff_json, remark, etl_time, mtime "
                 "FROM etl.dwd_datawind_dataset_change_i_d WHERE dataset_id=%s "

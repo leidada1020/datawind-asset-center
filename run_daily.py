@@ -228,7 +228,11 @@ def main():
     doris.create_table(ddl_mod.DDL_DS_WORKFLOW.format(db=doris.db))
     doris.create_table(ddl_mod.DDL_DS_LINEAGE.format(db=doris.db))
     doris.create_table(ddl_mod.DDL_DIMMET.format(db=doris.db))
-    print("==> 表已就绪: 快照/变更/文件夹/表血缘/字段血缘/解析统计/闭包/Doris表资产/Doris字段资产/DS调度资产/DS表间血缘/DataWind维度指标")
+    doris.create_table(ddl_mod.DDL_REPORT.format(db=doris.db))
+    doris.create_table(ddl_mod.DDL_DASHBOARD.format(db=doris.db))
+    doris.create_table(ddl_mod.DDL_REPORT_DATASET.format(db=doris.db))
+    doris.create_table(ddl_mod.DDL_REPORT_DASHBOARD.format(db=doris.db))
+    print("==> 表已就绪: 快照/变更/文件夹/表血缘/字段血缘/解析统计/闭包/Doris表资产/Doris字段资产/DS调度资产/DS表间血缘/DataWind维度指标/图表/仪表盘/图表-数据集关联/图表-仪表盘关联")
 
     # 文件夹树快照写入
     etl_time = time.strftime("%Y-%m-%d %H:%M:%S", _local_now())
@@ -419,6 +423,91 @@ def main():
               % (len([i for i, v in dim_map.items() if v]), dim_cnt, metric_cnt, stat_date))
     except Exception as e:
         print("    [警告] DataWind 维度指标采集失败(不影响主流程): %s" % e)
+
+    # DataWind 可视化资产采集（图表/仪表盘/关联, 每日全量, 独立 try 不影响主流程）
+    try:
+        print("==> 采集 DataWind 可视化资产(图表/仪表盘/关联) ...")
+        # 建表(幂等)
+        doris.create_table(ddl_mod.DDL_REPORT.format(db=doris.db))
+        doris.create_table(ddl_mod.DDL_DASHBOARD.format(db=doris.db))
+        doris.create_table(ddl_mod.DDL_REPORT_DATASET.format(db=doris.db))
+        doris.create_table(ddl_mod.DDL_REPORT_DASHBOARD.format(db=doris.db))
+        # 图表列表 -> 快照
+        reps = client.report_list()
+        rep_cols = ["dt", "etl_time", "report_id", "name", "owner_email", "url",
+                    "ctime", "mtime"]
+        rep_ph = ",".join(["%s"] * len(rep_cols))
+        rep_sql = "INSERT INTO {db}.ods_datawind_report_s_d ({c}) VALUES ({p})".format(
+            db=doris.db, c=",".join(rep_cols), p=rep_ph)
+        doris.exec("DELETE FROM {db}.ods_datawind_report_s_d WHERE dt = %s"
+                   .format(db=doris.db), (stat_date,))
+        rep_rows = []
+        for it in reps or []:
+            if not isinstance(it, dict) or not it.get("id"):
+                continue
+            rep_rows.append(tuple([stat_date, etl_time, it["id"], it.get("name") or "",
+                                   it.get("owner") or "", it.get("url") or "",
+                                   it.get("ctime"), it.get("mtime")]))
+        if rep_rows:
+            doris.execmany(rep_sql, rep_rows)
+        # 仪表盘列表 -> 快照
+        das = client.dashboard_list()
+        dash_cols = ["dt", "etl_time", "dashboard_id", "name", "owner_email", "url",
+                     "root_id", "ctime", "mtime"]
+        dash_ph = ",".join(["%s"] * len(dash_cols))
+        dash_sql = "INSERT INTO {db}.ods_datawind_dashboard_s_d ({c}) VALUES ({p})".format(
+            db=doris.db, c=",".join(dash_cols), p=dash_ph)
+        doris.exec("DELETE FROM {db}.ods_datawind_dashboard_s_d WHERE dt = %s"
+                   .format(db=doris.db), (stat_date,))
+        dash_rows = []
+        for it in das or []:
+            if not isinstance(it, dict) or not it.get("id"):
+                continue
+            dash_rows.append(tuple([stat_date, etl_time, it["id"], it.get("name") or "",
+                                    it.get("owner") or "", it.get("url") or "",
+                                    it.get("rootId"), it.get("ctime"), it.get("mtime")]))
+        if dash_rows:
+            doris.execmany(dash_sql, dash_rows)
+        # 图表-数据集关联 (reportDataset: {reportId: [datasets]})
+        rd = client.report_dataset()
+        rd_sql = "INSERT INTO {db}.ods_datawind_report_dataset_t_d ({c}) VALUES ({p})".format(
+            db=doris.db, c="dt,report_id,dataset_id,report_name,dataset_name,dataset_mtime,etl_time",
+            p=",".join(["%s"] * 7))
+        doris.exec("DELETE FROM {db}.ods_datawind_report_dataset_t_d WHERE dt = %s"
+                   .format(db=doris.db), (stat_date,))
+        rd_rows = []
+        rep_name = {it["id"]: (it.get("name") or "") for it in (reps or [])}
+        for rid, dslist in (rd or {}).items():
+            for ds in dslist or []:
+                if not isinstance(ds, dict) or not ds.get("id"):
+                    continue
+                rd_rows.append(tuple([stat_date, int(rid), ds["id"], rep_name.get(int(rid), ""),
+                                      ds.get("name") or "", ds.get("mtime") or "", etl_time]))
+        if rd_rows:
+            doris.execmany(rd_sql, rd_rows)
+        # 图表-仪表盘归属 (reportDashboard: {reportId: [dashboards]})
+        rdb = client.report_dashboard()
+        rdb_sql = "INSERT INTO {db}.ods_datawind_report_dashboard_t_d ({c}) VALUES ({p})".format(
+            db=doris.db, c="dt,report_id,dashboard_id,report_name,dashboard_name,etl_time",
+            p=",".join(["%s"] * 6))
+        doris.exec("DELETE FROM {db}.ods_datawind_report_dashboard_t_d WHERE dt = %s"
+                   .format(db=doris.db), (stat_date,))
+        rdb_rows = []
+        dash_name = {it["id"]: (it.get("name") or "") for it in (das or [])}
+        for rid, dlist in (rdb or {}).items():
+            for db_ in dlist or []:
+                if not isinstance(db_, dict) or not db_.get("id"):
+                    continue
+                rdb_rows.append(tuple([stat_date, int(rid), db_["id"],
+                                       rep_name.get(int(rid), ""),
+                                       dash_name.get(db_["id"], db_.get("name") or ""),
+                                       etl_time]))
+        if rdb_rows:
+            doris.execmany(rdb_sql, rdb_rows)
+        print("    可视化资产快照: 图表=%d 仪表盘=%d 图表-数据集关联=%d 图表-仪表盘归属=%d (dt=%s)"
+              % (len(rep_rows), len(dash_rows), len(rd_rows), len(rdb_rows), stat_date))
+    except Exception as e:
+        print("    [警告] DataWind 可视化资产采集失败(不影响主流程): %s" % e)
 
     # 校验
     cnt = doris.count(TBL_SNAPSHOT.format(db=doris.db), "dt=%s", (stat_date,))

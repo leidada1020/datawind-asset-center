@@ -341,6 +341,108 @@ PROPERTIES (
 )
 """
 
+DDL_REPORT = """
+CREATE TABLE IF NOT EXISTS {db}.ods_datawind_report_s_d (
+    dt          DATE         NOT NULL COMMENT '数据日期(分区键)=抓取日',
+    report_id   BIGINT       NOT NULL COMMENT '图表ID(DataWind全局唯一, dataQuery自助分析)',
+    etl_time    DATETIME     NOT NULL COMMENT '数据处理时间,本次ETL写入时刻(Asia/Shanghai)',
+    name        VARCHAR(512) COMMENT '图表名称',
+    owner_email VARCHAR(128) COMMENT '负责人邮箱(owner, 如 llyunze@2105712913)',
+    url         VARCHAR(1024) COMMENT '图表控制台URL(dataQuery自助分析, 可直接跳转)',
+    ctime       DATETIME     COMMENT '图表创建时间',
+    mtime       DATETIME     COMMENT '图表元数据最后修改时间(变更检测信号)'
+) ENGINE=OLAP
+UNIQUE KEY(dt, report_id)
+COMMENT 'DataWind图表(自助分析dataQuery)每日快照(s_d): 每日全量写入, dt分区+etl_time; 支撑数据集下游消费方(图表)血缘与图表资产盘点; 与数据集/仪表盘/关联表构成可视化资产体系'
+PARTITION BY RANGE(dt) ()
+DISTRIBUTED BY HASH(report_id) BUCKETS 8
+PROPERTIES (
+    "dynamic_partition.enable" = "true",
+    "dynamic_partition.time_unit" = "DAY",
+    "dynamic_partition.start" = "-30",
+    "dynamic_partition.end" = "3",
+    "dynamic_partition.prefix" = "p",
+    "dynamic_partition.replication_num" = "2",
+    "replication_num" = "2"
+)
+"""
+
+DDL_DASHBOARD = """
+CREATE TABLE IF NOT EXISTS {db}.ods_datawind_dashboard_s_d (
+    dt            DATE         NOT NULL COMMENT '数据日期(分区键)=抓取日',
+    dashboard_id  BIGINT       NOT NULL COMMENT '仪表盘ID(DataWind全局唯一)',
+    etl_time      DATETIME     NOT NULL COMMENT '数据处理时间,本次ETL写入时刻(Asia/Shanghai)',
+    name          VARCHAR(512) COMMENT '仪表盘名称',
+    owner_email   VARCHAR(128) COMMENT '负责人邮箱(owner)',
+    url           VARCHAR(1024) COMMENT '仪表盘控制台URL',
+    root_id       INT          COMMENT '归属: 0=公共仪表盘 1=个人仪表盘',
+    ctime         DATETIME     COMMENT '仪表盘创建时间',
+    mtime         DATETIME     COMMENT '仪表盘元数据最后修改时间'
+) ENGINE=OLAP
+UNIQUE KEY(dt, dashboard_id)
+COMMENT 'DataWind仪表盘每日快照(s_d): 每日全量写入, dt分区+etl_time; 图表->仪表盘归属关系的资产侧, 与图表/数据集构成可视化资产体系'
+PARTITION BY RANGE(dt) ()
+DISTRIBUTED BY HASH(dashboard_id) BUCKETS 4
+PROPERTIES (
+    "dynamic_partition.enable" = "true",
+    "dynamic_partition.time_unit" = "DAY",
+    "dynamic_partition.start" = "-30",
+    "dynamic_partition.end" = "3",
+    "dynamic_partition.prefix" = "p",
+    "dynamic_partition.replication_num" = "2",
+    "replication_num" = "2"
+)
+"""
+
+DDL_REPORT_DATASET = """
+CREATE TABLE IF NOT EXISTS {db}.ods_datawind_report_dataset_t_d (
+    dt              DATE         NOT NULL COMMENT '数据日期(分区键)=抓取日',
+    report_id       BIGINT       NOT NULL COMMENT '图表ID(下游消费方)',
+    dataset_id      BIGINT       NOT NULL COMMENT '数据集ID(图表引用的上游数据集)',
+    report_name     VARCHAR(512) COMMENT '图表名称(冗余, 便于按图表反查)',
+    dataset_name    VARCHAR(512) COMMENT '数据集名称(冗余, 便于按数据集反查)',
+    dataset_mtime   DATETIME     COMMENT '数据集元数据最后修改时间(关联时刻, 参考)',
+    etl_time        DATETIME     NOT NULL COMMENT '数据处理时间'
+) ENGINE=OLAP
+UNIQUE KEY(dt, report_id, dataset_id)
+COMMENT 'DataWind图表-数据集关联每日快照(t_d): 接口reportDataset返回 reportId->[datasets], 支撑数据集下游血缘(该数据集被哪些图表消费)与图表上游溯源; dt分区+etl_time, 重跑先删当日分区再全量'
+PARTITION BY RANGE(dt) ()
+DISTRIBUTED BY HASH(report_id) BUCKETS 8
+PROPERTIES (
+    "dynamic_partition.enable" = "true",
+    "dynamic_partition.time_unit" = "DAY",
+    "dynamic_partition.start" = "-180",
+    "dynamic_partition.end" = "3",
+    "dynamic_partition.prefix" = "p",
+    "dynamic_partition.replication_num" = "2",
+    "replication_num" = "2"
+)
+"""
+
+DDL_REPORT_DASHBOARD = """
+CREATE TABLE IF NOT EXISTS {db}.ods_datawind_report_dashboard_t_d (
+    dt            DATE         NOT NULL COMMENT '数据日期(分区键)=抓取日',
+    report_id     BIGINT       NOT NULL COMMENT '图表ID',
+    dashboard_id  BIGINT       NOT NULL COMMENT '仪表盘ID(图表所属看板)',
+    report_name   VARCHAR(512) COMMENT '图表名称(冗余)',
+    dashboard_name VARCHAR(512) COMMENT '仪表盘名称(冗余)',
+    etl_time      DATETIME     NOT NULL COMMENT '数据处理时间'
+) ENGINE=OLAP
+UNIQUE KEY(dt, report_id, dashboard_id)
+COMMENT 'DataWind图表-仪表盘归属每日快照(t_d): 接口reportDashboard返回 reportId->[dashboards], 支撑图表->仪表盘归属查询(看板内图表清单); dt分区+etl_time, 重跑先删当日分区再全量'
+PARTITION BY RANGE(dt) ()
+DISTRIBUTED BY HASH(report_id) BUCKETS 4
+PROPERTIES (
+    "dynamic_partition.enable" = "true",
+    "dynamic_partition.time_unit" = "DAY",
+    "dynamic_partition.start" = "-180",
+    "dynamic_partition.end" = "3",
+    "dynamic_partition.prefix" = "p",
+    "dynamic_partition.replication_num" = "2",
+    "replication_num" = "2"
+)
+"""
+
 DDL_DIMMET = """
 CREATE TABLE IF NOT EXISTS {db}.ods_datawind_dimmet_s_d (
     dt                  DATE         NOT NULL COMMENT '统计日期(分区)',
